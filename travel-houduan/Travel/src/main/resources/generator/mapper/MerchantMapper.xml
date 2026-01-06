@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.travel.mapper.MerchantMapper">
+
+    <resultMap id="BaseResultMap" type="org.example.travel.model.entity.Merchant">
+            <id property="id" column="id" />
+            <result property="name" column="name" />
+            <result property="category" column="category" />
+            <result property="projectId" column="project_id" />
+            <result property="relevanceScore" column="relevance_score" />
+            <result property="lat" column="lat" />
+            <result property="lng" column="lng" />
+            <result property="rating" column="rating" />
+            <result property="thirdPartyUrl" column="third_party_url" />
+            <result property="createdAt" column="created_at" />
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,name,category,project_id,relevance_score,lat,
+        lng,rating,third_party_url,created_at
+    </sql>
+</mapper>

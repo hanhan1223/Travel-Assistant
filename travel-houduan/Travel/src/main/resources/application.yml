@@ -1,0 +1,116 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+    session:
+      cookie:
+        max-age: 2592000
+
+spring:
+  application:
+    name: Travel
+
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:Travel}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:}
+
+  servlet:
+    multipart:
+      max-file-size: 10MB
+
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: qwen-max
+      embedding:
+        options:
+          model: text-embedding-v4
+    vectorstore:
+      pgvector:
+        index-type: hnsw
+        distance-type: cosine_distance
+        dimensions: 1024
+
+pgvector:
+  datasource:
+    url: jdbc:postgresql://14.103.124.109:5433/Travel
+    username: admin
+    password: yourpassword
+
+spring.data:
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 5000
+    database: ${REDIS_DATABASE:0}
+    serializer: json
+  session:
+    store-type: redis
+    timeout: 2592000
+
+spring.mail:
+  host: ${MAIL_HOST:smtp.163.com}
+  port: ${MAIL_PORT:465}
+  username: ${MAIL_USERNAME:}
+  password: ${MAIL_PASSWORD:}
+  properties:
+    mail:
+      smtp:
+        auth: true
+        starttls:
+          enable: true
+          required: true
+        ssl:
+          enable: true
+        socketFactory:
+          class: javax.net.ssl.SSLSocketFactory
+          port: 465
+  default-encoding: UTF-8
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: false
+  global-config:
+    enable-sql-runner: true
+    db-config:
+      logic-delete-field: isDelete
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  mapper-locations: classpath:generator/mapper/*.xml
+
+knife4j:
+  enable: true
+  openapi:
+    title: 非遗文化智能伴游系统
+    version: 1.0
+    group:
+      default:
+        api-rule: package
+        api-rule-resources:
+          - com.travel.controller
+
+cos:
+  client:
+    host: ${COS_HOST:}
+    secretId: ${COS_SECRET_ID:}
+    secretKey: ${COS_SECRET_KEY:}
+    region: ${COS_REGION:}
+    bucket: ${COS_BUCKET:}
+
+amap:
+  key: ${AMAP_KEY:}
+
+# 百度地图配置
+baidu:
+  map:
+    ak: ${BAIDU_MAP_AK:}
+
+# Python算法服务配置
+python:
+  algorithm:
+    base-url: ${PYTHON_ALGORITHM_URL:http://localhost:8000}

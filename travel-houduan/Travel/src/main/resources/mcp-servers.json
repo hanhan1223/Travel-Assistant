@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "amap-maps": {
+      "args": [
+        "-y",
+        "@amap/amap-maps-mcp-server"
+      ],
+      "command": "npx",
+      "env": {
+        "AMAP_MAPS_API_KEY": "7bb0a150a7ec33d5704b14fde1b376d5"
+      }
+    },
+    "weather_fastmcp": {
+      "args": [
+        "-m",
+        "weather_server.server"
+      ],
+      "command": "python"
+    }
+  }
+
+}
