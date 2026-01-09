@@ -274,7 +274,9 @@ const isFoggy = computed(() => /雾|fog|mist|haze/i.test(w.value));
 const renderMessage = (content: string) => {
   if (!content) return '';
   
-  let processedContent = content;
+  // 将字符串 \n 转换为真正的换行符
+  let processedContent = content.replace(/\\n/g, '\n');
+  
   // Markdown 渲染
   let html = md.render(processedContent);
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { UploadUserFile, UploadProps, UploadRawFile, UploadFile, UploadFiles } from 'element-plus'
+import type { UploadUserFile, UploadProps, UploadRawFile } from 'element-plus'
 import { Search, Plus, Edit, Delete, Picture as IconPicture } from '@element-plus/icons-vue'
 
 import { 
@@ -306,7 +306,7 @@ const handleMediaRemove: UploadProps['onRemove'] = (uploadFile, uploadFiles) => 
 }
 
 // 【修复】标准的 onChange 处理函数，解决类型报错
-const handleFileChange: UploadProps['onChange'] = (uploadFile, uploadFiles) => {
+const handleFileChange: UploadProps['onChange'] = (_uploadFile, uploadFiles) => {
   // v-model 会自动同步，这里主要用于类型同步和扩展
   mediaFileList.value = uploadFiles as ExtendedUploadFile[]
 }
