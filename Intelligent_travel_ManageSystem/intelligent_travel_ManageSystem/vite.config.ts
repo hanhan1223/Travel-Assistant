@@ -29,7 +29,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080', // 后端服务地址
+        target: 'http://154.12.28.62:8080', // 后端服务地址
         changeOrigin: true,
         // rewrite: (path) => path.replace(/^\/api/, '') // 根据后端是否包含 /api 前缀决定是否保留
       }

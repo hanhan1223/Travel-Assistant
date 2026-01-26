@@ -22,6 +22,21 @@ public interface ChatService {
      * @return SSE发射器
      */
     SseEmitter chat(ChatRequest request, EnvContextDTO envContext, Long userId);
+    
+    /**
+     * 发送图片消息并获取流式响应（支持图片识别）
+     * @param file 图片文件
+     * @param conversationId 会话ID（可选）
+     * @param message 附加文本消息（可选）
+     * @param envContext 环境上下文
+     * @param userId 用户ID
+     * @return SSE发射器
+     */
+    SseEmitter chatWithImage(org.springframework.web.multipart.MultipartFile file, 
+                             Long conversationId, 
+                             String message, 
+                             EnvContextDTO envContext, 
+                             Long userId);
 
     /**
      * 创建新会话

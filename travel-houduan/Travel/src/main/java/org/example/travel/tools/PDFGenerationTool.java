@@ -10,6 +10,7 @@ import com.itextpdf.kernel.pdf.PdfWriter;
 import com.itextpdf.layout.Document;
 import com.itextpdf.layout.element.Image;
 import com.itextpdf.layout.element.Paragraph;
+import com.itextpdf.layout.properties.HorizontalAlignment;
 import com.itextpdf.layout.properties.TextAlignment;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -20,12 +21,10 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.net.URL;
 import java.util.Date;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -70,6 +69,10 @@ public class PDFGenerationTool {
     ) {
         File tempFile = null;
         try {
+            // 过滤emoji和特殊字符，避免字体编码错误
+            title = filterUnsupportedCharacters(title);
+            content = filterUnsupportedCharacters(content);
+            
             // 创建临时文件
             tempFile = File.createTempFile("travel_report_", ".pdf");
             
@@ -132,6 +135,7 @@ public class PDFGenerationTool {
                         .setMarginBottom(10));
 
                 String[] urls = imageUrls.split(",");
+                int successCount = 0;
                 for (String url : urls) {
                     url = url.trim();
                     // 校验URL格式：必须以http://或https://开头
@@ -140,27 +144,75 @@ public class PDFGenerationTool {
                         continue;
                     }
                     try {
-                        // 下载图片
-                        byte[] imageBytes = HttpUtil.downloadBytes(url);
+                        log.info("开始下载图片: {}", url);
+                        
+                        // 方法1：使用 HttpUtil 下载
+                        byte[] imageBytes = null;
+                        try {
+                            imageBytes = HttpUtil.downloadBytes(url); // 10秒超时
+                        } catch (Exception e) {
+                            log.warn("HttpUtil下载失败，尝试使用URL方式: {}", e.getMessage());
+                        }
+                        
+                        // 方法2：如果方法1失败，使用 URL 直接读取
+                        if (imageBytes == null || imageBytes.length == 0) {
+                            try {
+                                URL imageUrl = new URL(url);
+                                imageBytes = imageUrl.openStream().readAllBytes();
+                            } catch (Exception e) {
+                                log.warn("URL方式下载失败: {}", e.getMessage());
+                            }
+                        }
+                        
                         if (imageBytes == null || imageBytes.length == 0) {
                             log.warn("图片下载为空: {}", url);
                             continue;
                         }
+                        
+                        log.info("图片下载成功，大小: {} bytes", imageBytes.length);
+                        
+                        // 创建图片对象
                         Image image = new Image(ImageDataFactory.create(imageBytes));
                         
-                        // 设置图片大小（最大宽度400）
+                        // 设置图片大小（最大宽度400，保持宽高比）
                         float maxWidth = 400;
-                        if (image.getImageWidth() > maxWidth) {
-                            image.scaleToFit(maxWidth, maxWidth * image.getImageHeight() / image.getImageWidth());
+                        float imageWidth = image.getImageWidth();
+                        float imageHeight = image.getImageHeight();
+                        
+                        if (imageWidth > maxWidth) {
+                            float scale = maxWidth / imageWidth;
+                            image.scaleToFit(maxWidth, imageHeight * scale);
                         }
                         
-                        image.setMarginBottom(10);
+                        // 设置图片居中
+                        image.setHorizontalAlignment(com.itextpdf.layout.properties.HorizontalAlignment.CENTER);
+                        image.setMarginBottom(15);
+                        image.setMarginTop(5);
+                        
                         document.add(image);
+                        successCount++;
+                        log.info("图片插入成功: {}", url);
+                        
+                    } catch (com.itextpdf.io.exceptions.IOException e) {
+                        log.error("图片格式不支持或数据损坏: {}", url, e);
+                        // 添加错误提示到PDF
+                        document.add(new Paragraph("图片加载失败: " + url)
+                                .setFont(font)
+                                .setFontSize(10)
+                                .setFontColor(ColorConstants.RED)
+                                .setMarginBottom(10));
                     } catch (Exception e) {
-                        log.warn("图片加载失败: {}", url, e);
-                        // 不在PDF中显示错误信息，静默跳过
+                        log.error("图片加载失败: {}", url, e);
+                        // 添加错误提示到PDF
+                        document.add(new Paragraph("图片加载失败: " + e.getMessage())
+                                .setFont(font)
+                                .setFontSize(10)
+                                .setFontColor(ColorConstants.RED)
+                                .setMarginBottom(10));
                     }
                 }
+                
+                log.info("图片处理完成，成功插入 {}/{} 张图片", successCount, urls.length);
             }
 
             // 添加页脚
@@ -208,5 +260,36 @@ public class PDFGenerationTool {
                 tempFile.delete();
             }
         }
+    }
+    
+    /**
+     * 过滤不支持的字符（emoji、特殊符号等）
+     * STSong-Light字体只支持BMP（Basic Multilingual Plane）字符
+     */
+    private String filterUnsupportedCharacters(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        
+        // 方法1：移除所有 emoji 和特殊符号
+        // 使用更全面的正则表达式匹配所有 emoji 范围
+        String filtered = text
+                // 移除常见 emoji 表情符号
+                .replaceAll("[\\u2600-\\u27BF]", "")  // 杂项符号
+                .replaceAll("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+", "")  // emoji 代理对
+                .replaceAll("[\\u2300-\\u23FF]", "")  // 杂项技术符号
+                .replaceAll("[\\u2B50-\\u2B55]", "")  // 星星等符号
+                .replaceAll("[\\uD83D\\uDC00-\\uD83D\\uDDFF]", "")  // 表情符号
+                .replaceAll("[\\uD83E\\uDD00-\\uD83E\\uDDFF]", "")  // 补充表情符号
+                .replaceAll("[\\uD83C\\uDF00-\\uD83C\\uDFFF]", "")  // 杂项符号和象形文字
+                // 移除其他特殊字符
+                .replaceAll("[\\p{So}\\p{Cn}]", "");  // 其他符号和未分配字符
+        
+        // 如果过滤后内容有变化，记录日志
+        if (!filtered.equals(text)) {
+            log.info("PDF内容已过滤特殊字符，原长度: {}, 过滤后: {}", text.length(), filtered.length());
+        }
+        
+        return filtered;
     }
 }

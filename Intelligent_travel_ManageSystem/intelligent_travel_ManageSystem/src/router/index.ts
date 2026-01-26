@@ -64,6 +64,20 @@ const routes: Array<RouteRecordRaw> = [
         meta: { title: '文档列表' }
       }
     ]
+  },
+  {
+    path: '/system',
+    component: Layout,
+    redirect: '/system/config',
+    meta: { title: '系统管理', icon: 'Setting' },
+    children: [
+      {
+        path: 'config',
+        name: 'SystemConfig',
+        component: () => import('@/views/system/config.vue'),
+        meta: { title: '系统配置' }
+      }
+    ]
   }
 ]
 

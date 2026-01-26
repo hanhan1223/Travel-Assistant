@@ -181,6 +181,7 @@
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
 
+
         <!-- PostgreSQL - 如果使用 pgvector 需要此依赖 -->
         <dependency>
             <groupId>org.postgresql</groupId>
@@ -198,6 +199,13 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-tika-document-reader</artifactId>
+        </dependency>
+
+        <!-- Jsoup - HTML 解析（用于网页爬取） -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.17.2</version>
         </dependency>
 
     </dependencies>

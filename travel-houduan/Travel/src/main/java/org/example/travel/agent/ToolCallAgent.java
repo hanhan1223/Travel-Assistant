@@ -31,10 +31,18 @@ public class ToolCallAgent extends ReActAgent{
 
     // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
     private final ChatOptions chatOptions;
+    
+    // 工具调用线程池（用于并行执行）
+    private final java.util.concurrent.Executor toolExecutor;
 
     public ToolCallAgent(ToolCallback[] availableTools) {
+        this(availableTools, null);
+    }
+    
+    public ToolCallAgent(ToolCallback[] availableTools, java.util.concurrent.Executor toolExecutor) {
         super();
         this.availableTools = availableTools;
+        this.toolExecutor = toolExecutor;
         // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
         this.chatOptions = DashScopeChatOptions.builder()
                 .withInternalToolExecutionEnabled(false)
@@ -110,7 +118,7 @@ public class ToolCallAgent extends ReActAgent{
     }
 
     /**
-     * 执行工具调用并处理结果
+     * 执行工具调用并处理结果（支持并行执行）
      *
      * @return 执行结果
      */
@@ -119,32 +127,21 @@ public class ToolCallAgent extends ReActAgent{
         if (!toolCallChatResponse.hasToolCalls()) {
             return "没有工具需要调用";
         }
+        
         // 手动处理工具调用
         AssistantMessage assistantMessage = toolCallChatResponse.getResult().getOutput();
         getMessageList().add(assistantMessage);
         
-        // 创建工具响应消息
-        List<ToolResponseMessage.ToolResponse> responses = new java.util.ArrayList<>();
-        for (AssistantMessage.ToolCall toolCall : assistantMessage.getToolCalls()) {
-            // 查找对应的工具并执行
-            for (ToolCallback tool : availableTools) {
-                if (tool.getToolDefinition().name().equals(toolCall.name())) {
-                    try {
-                        String result = tool.call(toolCall.arguments());
-                        responses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), toolCall.name(), result));
-                    } catch (Exception e) {
-                        log.error("工具调用失败: " + toolCall.name(), e);
-                        // 对doTerminate工具的错误做特殊处理，尝试从参数中提取finalAnswer
-                        if ("doTerminate".equals(toolCall.name())) {
-                            String fallbackAnswer = extractFinalAnswerFromArgs(toolCall.arguments());
-                            responses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), toolCall.name(), fallbackAnswer));
-                        } else {
-                            responses.add(new ToolResponseMessage.ToolResponse(toolCall.id(), toolCall.name(), "工具调用出错，请稍后再试"));
-                        }
-                    }
-                    break;
-                }
-            }
+        List<AssistantMessage.ToolCall> toolCalls = assistantMessage.getToolCalls();
+        List<ToolResponseMessage.ToolResponse> responses;
+        
+        // 如果配置了线程池，使用并行执行；否则串行执行
+        if (toolExecutor != null && toolCalls.size() > 1) {
+            log.info("使用线程池并行执行 {} 个工具", toolCalls.size());
+            responses = executeToolsInParallel(toolCalls);
+        } else {
+            log.info("串行执行 {} 个工具", toolCalls.size());
+            responses = executeToolsSequentially(toolCalls);
         }
         
         ToolResponseMessage toolResponseMessage = new ToolResponseMessage(responses, java.util.Map.of());
@@ -157,11 +154,142 @@ public class ToolCallAgent extends ReActAgent{
             // 任务结束，更改状态
             setState(AgentState.FINISHED);
         }
+        
         String results = responses.stream()
                 .map(response -> "工具 " + response.name() + " 返回的结果：" + response.responseData())
                 .collect(Collectors.joining("\n"));
         log.info(results);
         return results;
+    }
+    
+    /**
+     * 并行执行工具调用
+     */
+    private List<ToolResponseMessage.ToolResponse> executeToolsInParallel(List<AssistantMessage.ToolCall> toolCalls) {
+        long startTime = System.currentTimeMillis();
+        
+        // 创建异步任务列表
+        List<java.util.concurrent.CompletableFuture<ToolResponseMessage.ToolResponse>> futures = 
+            new java.util.ArrayList<>();
+        
+        for (AssistantMessage.ToolCall toolCall : toolCalls) {
+            java.util.concurrent.CompletableFuture<ToolResponseMessage.ToolResponse> future = 
+                java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                    return executeToolCall(toolCall);
+                }, toolExecutor);
+            
+            futures.add(future);
+        }
+        
+        // 等待所有工具调用完成（设置30秒超时）
+        java.util.concurrent.CompletableFuture<Void> allOf = 
+            java.util.concurrent.CompletableFuture.allOf(
+                futures.toArray(new java.util.concurrent.CompletableFuture[0])
+            );
+        
+        try {
+            allOf.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.error("工具调用超时（30秒），取消未完成的任务");
+            futures.forEach(f -> f.cancel(true));
+        } catch (Exception e) {
+            log.error("工具调用异常", e);
+        }
+        
+        // 收集结果
+        List<ToolResponseMessage.ToolResponse> responses = futures.stream()
+            .filter(f -> f.isDone() && !f.isCancelled())
+            .map(f -> {
+                try {
+                    return f.get();
+                } catch (Exception e) {
+                    log.error("获取工具结果失败", e);
+                    return null;
+                }
+            })
+            .filter(r -> r != null)
+            .collect(Collectors.toList());
+        
+        long duration = System.currentTimeMillis() - startTime;
+        log.info("并行执行 {} 个工具完成，总耗时: {}ms", toolCalls.size(), duration);
+        
+        return responses;
+    }
+    
+    /**
+     * 串行执行工具调用（兼容模式）
+     */
+    private List<ToolResponseMessage.ToolResponse> executeToolsSequentially(List<AssistantMessage.ToolCall> toolCalls) {
+        long startTime = System.currentTimeMillis();
+        
+        List<ToolResponseMessage.ToolResponse> responses = new java.util.ArrayList<>();
+        
+        for (AssistantMessage.ToolCall toolCall : toolCalls) {
+            ToolResponseMessage.ToolResponse response = executeToolCall(toolCall);
+            responses.add(response);
+        }
+        
+        long duration = System.currentTimeMillis() - startTime;
+        log.info("串行执行 {} 个工具完成，总耗时: {}ms", toolCalls.size(), duration);
+        
+        return responses;
+    }
+    
+    /**
+     * 执行单个工具调用
+     */
+    private ToolResponseMessage.ToolResponse executeToolCall(AssistantMessage.ToolCall toolCall) {
+        long startTime = System.currentTimeMillis();
+        String threadName = Thread.currentThread().getName();
+        
+        try {
+            log.info("开始执行工具: {} (线程: {})", toolCall.name(), threadName);
+            
+            // 查找对应的工具并执行
+            for (ToolCallback tool : availableTools) {
+                if (tool.getToolDefinition().name().equals(toolCall.name())) {
+                    String result = tool.call(toolCall.arguments());
+                    
+                    long duration = System.currentTimeMillis() - startTime;
+                    log.info("工具 {} 执行完成，耗时: {}ms (线程: {})", 
+                        toolCall.name(), duration, threadName);
+                    
+                    return new ToolResponseMessage.ToolResponse(
+                        toolCall.id(), 
+                        toolCall.name(), 
+                        result
+                    );
+                }
+            }
+            
+            log.warn("未找到工具: {}", toolCall.name());
+            return new ToolResponseMessage.ToolResponse(
+                toolCall.id(), 
+                toolCall.name(), 
+                "工具不存在"
+            );
+            
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("工具 {} 执行失败，耗时: {}ms (线程: {})", 
+                toolCall.name(), duration, threadName, e);
+            
+            // 对doTerminate工具的错误做特殊处理
+            if ("doTerminate".equals(toolCall.name())) {
+                String fallbackAnswer = extractFinalAnswerFromArgs(toolCall.arguments());
+                return new ToolResponseMessage.ToolResponse(
+                    toolCall.id(), 
+                    toolCall.name(), 
+                    fallbackAnswer
+                );
+            }
+            
+            return new ToolResponseMessage.ToolResponse(
+                toolCall.id(), 
+                toolCall.name(), 
+                "工具调用出错: " + e.getMessage()
+            );
+        }
     }
     
     /**

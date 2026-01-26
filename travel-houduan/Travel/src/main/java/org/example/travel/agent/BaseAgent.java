@@ -33,10 +33,11 @@ public abstract class BaseAgent {
 
 
     /**
-     * 执行单步
+     * 执行单步（优化版）
+     * 注意：此方法是同步的，会阻塞调用线程。对于Web请求，建议使用 runStream() 异步版本。
      *
-     * @param userPrompt
-     * @return
+     * @param userPrompt 用户输入
+     * @return 执行结果
      */
     public String run(String userPrompt) {
         if (this.state != AgentState.IDLE) {
@@ -48,34 +49,44 @@ public abstract class BaseAgent {
         this.state = AgentState.RUNNING;
 
         messageList.add(new UserMessage(userPrompt));
-        // 保存结果列表
-        List<String> results = new ArrayList<>();
+        
+        // 使用 StringBuilder 提高字符串拼接效率
+        StringBuilder resultBuilder = new StringBuilder();
+        
         try {
             // 执行循环
             for (int i = 0; i < maxSteps && state != AgentState.FINISHED; i++) {
                 int stepNumber = i + 1;
                 currentStep = stepNumber;
                 log.info("Executing step {}/{}", stepNumber, maxSteps);
+                
                 // 单步执行
                 String stepResult = step();
-                String result = "Step " + stepNumber + ": " + stepResult;
-                results.add(result);
+                
+                // 只在需要时记录步骤结果（可选）
+                if (log.isDebugEnabled()) {
+                    resultBuilder.append("Step ").append(stepNumber).append(": ")
+                                 .append(stepResult).append("\n");
+                }
             }
+            
             // 检查是否超出步骤限制
             if (currentStep >= maxSteps) {
                 state = AgentState.FINISHED;
-                results.add("Terminated: Reached max steps (" + maxSteps + ")");
+                log.warn("Agent terminated: Reached max steps ({})", maxSteps);
             }
-            return String.join("\n", results);
+            
+            // 返回简化的结果（只返回最终状态）
+            return "Agent completed in " + currentStep + " steps. State: " + state;
+            
         } catch (Exception e) {
             state = AgentState.ERROR;
-            log.error("error executing agent", e);
-            return "执行错误" + e.getMessage();
+            log.error("Error executing agent", e);
+            return "执行错误: " + e.getMessage();
         } finally {
-            // 3、清理资源
+            // 清理资源
             this.cleanup();
         }
-
     }
 
     /**

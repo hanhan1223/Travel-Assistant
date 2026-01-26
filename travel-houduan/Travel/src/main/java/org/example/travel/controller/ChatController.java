@@ -56,6 +56,43 @@ public class ChatController {
 
         return chatService.chat(request, envContext, loginUser.getId());
     }
+    
+    /**
+     * 发送图片消息（支持图片识别）
+     * 用户上传图片后，系统会自动识别图片内容并生成回复
+     */
+    @PostMapping("/send/image")
+    public SseEmitter sendImageMessage(
+            @RequestParam(value = "file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(value = "conversationId", required = false) Long conversationId,
+            @RequestParam(value = "message", required = false) String message,
+            @RequestParam(value = "lat", required = false) java.math.BigDecimal lat,
+            @RequestParam(value = "lng", required = false) java.math.BigDecimal lng,
+            HttpServletRequest httpRequest) {
+        
+        ThrowUtils.throwIf(file == null || file.isEmpty(), ErrorCode.PARAMS_ERROR, "图片文件不能为空");
+        
+        // 验证文件类型
+        String contentType = file.getContentType();
+        if (contentType == null || !contentType.startsWith("image/")) {
+            throw new org.example.travel.exception.BusinessException(ErrorCode.PARAMS_ERROR, "只支持图片文件");
+        }
+        
+        // 验证文件大小（最大10MB）
+        if (file.getSize() > 10 * 1024 * 1024) {
+            throw new org.example.travel.exception.BusinessException(ErrorCode.PARAMS_ERROR, "图片文件不能超过10MB");
+        }
+        
+        User loginUser = userService.getLoginUser(httpRequest);
+        
+        // 获取环境上下文
+        EnvContextDTO envContext = null;
+        if (lat != null && lng != null) {
+            envContext = envContextService.getEnvContext(lat, lng);
+        }
+        
+        return chatService.chatWithImage(file, conversationId, message, envContext, loginUser.getId());
+    }
 
     /**
      * 初始化会话（获取欢迎语和环境信息）

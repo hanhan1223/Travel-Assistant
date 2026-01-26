@@ -12,9 +12,17 @@ spring:
 
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:Travel}
-    username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:}
+    url: jdbc:mysql://14.103.124.109:3306/Travel
+    username: travel
+    password: ${MYSQL_PASSWORD:your-mysql-password}
+
+    hikari:
+      maximum-pool-size: 20          # 最大连接数
+      minimum-idle: 5                # 最小空闲连接
+      connection-timeout: 30000      # 连接超时 30s
+      idle-timeout: 600000           # 空闲超时 10min
+      max-lifetime: 1800000          # 连接最大存活时间 30min
+      connection-test-query: SELECT 1
 
   servlet:
     multipart:
@@ -22,42 +30,53 @@ spring:
 
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:}
+      api-key: ${DASHSCOPE_API_KEY:your-dashscope-api-key}
       chat:
         options:
-          model: qwen-max
+          model: qwen-plus
+          stream: true
+          temperature: 0.7
+
       embedding:
         options:
-          model: text-embedding-v4
+          model: text-embedding-v3
+      vision:
+        model: qwen-vl-plus
+    
     vectorstore:
       pgvector:
         index-type: hnsw
         distance-type: cosine_distance
         dimensions: 1024
 
+
 pgvector:
   datasource:
     url: jdbc:postgresql://14.103.124.109:5433/Travel
     username: admin
-    password: yourpassword
+    password: ${PGVECTOR_PASSWORD:your-pgvector-password}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 20000
 
 spring.data:
   redis:
-    host: ${REDIS_HOST:localhost}
-    port: ${REDIS_PORT:6379}
-    password: ${REDIS_PASSWORD:}
+    host: 14.103.124.109
+    port: 6379
+    password: ${REDIS_PASSWORD:your-redis-password}
     timeout: 5000
-    database: ${REDIS_DATABASE:0}
+    database: 8
     serializer: json
   session:
     store-type: redis
     timeout: 2592000
 
 spring.mail:
-  host: ${MAIL_HOST:smtp.163.com}
-  port: ${MAIL_PORT:465}
-  username: ${MAIL_USERNAME:}
-  password: ${MAIL_PASSWORD:}
+  host: smtp.163.com
+  port: 465
+  username: ${MAIL_USERNAME:your-email@163.com}
+  password: ${MAIL_PASSWORD:your-mail-password}
   properties:
     mail:
       smtp:
@@ -74,7 +93,7 @@ spring.mail:
 
 mybatis-plus:
   configuration:
-    map-underscore-to-camel-case: false
+    map-underscore-to-camel-case: true
   global-config:
     enable-sql-runner: true
     db-config:
@@ -96,21 +115,32 @@ knife4j:
 
 cos:
   client:
-    host: ${COS_HOST:}
-    secretId: ${COS_SECRET_ID:}
-    secretKey: ${COS_SECRET_KEY:}
-    region: ${COS_REGION:}
-    bucket: ${COS_BUCKET:}
+    host: https://travel-1356886289.cos.ap-guangzhou.myqcloud.com
+    secretId: ${COS_SECRET_ID:your-secret-id}
+    secretKey: ${COS_SECRET_KEY:your-secret-key}
+    region: ap-guangzhou
+    bucket: travel-1356886289
 
 amap:
-  key: ${AMAP_KEY:}
+  key: ${AMAP_KEY:your-amap-key}
 
 # 百度地图配置
 baidu:
   map:
-    ak: ${BAIDU_MAP_AK:}
+    ak: ${BAIDU_MAP_AK:your-baidu-map-ak}
 
 # Python算法服务配置
 python:
   algorithm:
-    base-url: ${PYTHON_ALGORITHM_URL:http://localhost:8000}
+    base-url: http://123.57.85.75:8000
+    connect-timeout: 3000
+    read-timeout: 10000
+
+
+# 日志配置
+logging:
+  level:
+    org.example.travel.tools: DEBUG
+    org.example.travel.agent: DEBUG
+    org.springframework.ai.mcp: DEBUG
+    com.alibaba.cloud.ai.mcp: DEBUG

@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 引入所有需要的图标
-import { Odometer, Reading, GoldMedal, Shop } from '@element-plus/icons-vue'
+import { Odometer, Reading, GoldMedal, Shop, Setting } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -83,6 +83,14 @@ const handleLogout = () => {
               <span>知识库管理</span>
             </template>
             <el-menu-item index="/knowledge/list">文档列表</el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="/system">
+            <template #title>
+              <el-icon><Setting /></el-icon>
+              <span>系统管理</span>
+            </template>
+            <el-menu-item index="/system/config">系统配置</el-menu-item>
           </el-sub-menu>
 
         </el-menu>

@@ -4,8 +4,11 @@ import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.example.travel.constants.CacheConstants;
 import org.example.travel.model.dto.env.EnvContextDTO;
+import org.example.travel.service.CacheService;
 import org.example.travel.service.EnvContextService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -24,6 +27,9 @@ public class EnvContextServiceImpl implements EnvContextService {
 
     @Value("${baidu.map.ak:}")
     private String baiduAk;
+    
+    @Resource
+    private CacheService cacheService;
 
     // 不适合户外的天气
     private static final Set<String> BAD_WEATHER = Set.of(
@@ -32,6 +38,26 @@ public class EnvContextServiceImpl implements EnvContextService {
 
     @Override
     public EnvContextDTO getEnvContext(BigDecimal lat, BigDecimal lng) {
+        // 使用缓存
+        String cacheKey = CacheConstants.buildKey(
+            CacheConstants.ENV_CONTEXT_PREFIX,
+            lat,
+            lng
+        );
+        
+        return cacheService.get(
+            cacheKey,
+            () -> loadEnvContext(lat, lng),
+            CacheConstants.ENV_CONTEXT_TIMEOUT,
+            CacheConstants.ENV_CONTEXT_UNIT,
+            EnvContextDTO.class
+        );
+    }
+    
+    /**
+     * 加载环境上下文（实际逻辑）
+     */
+    private EnvContextDTO loadEnvContext(BigDecimal lat, BigDecimal lng) {
         EnvContextDTO.EnvContextDTOBuilder builder = EnvContextDTO.builder()
                 .lat(lat)
                 .lng(lng);
@@ -79,6 +105,25 @@ public class EnvContextServiceImpl implements EnvContextService {
 
     @Override
     public String getWeather(String city) {
+        // 使用缓存
+        String cacheKey = CacheConstants.buildKey(
+            CacheConstants.ENV_WEATHER_PREFIX,
+            city
+        );
+        
+        return cacheService.get(
+            cacheKey,
+            () -> loadWeather(city),
+            CacheConstants.ENV_WEATHER_TIMEOUT,
+            CacheConstants.ENV_WEATHER_UNIT,
+            String.class
+        );
+    }
+    
+    /**
+     * 加载天气信息（实际逻辑）
+     */
+    private String loadWeather(String city) {
         try {
             // 先通过地理编码获取城市的行政区划代码
             String encodedCity = URLEncoder.encode(city, StandardCharsets.UTF_8);
@@ -118,6 +163,46 @@ public class EnvContextServiceImpl implements EnvContextService {
         return "天气信息获取失败";
     }
 
+    @Override
+    public String reverseGeocode(BigDecimal lat, BigDecimal lng) {
+        // 使用缓存
+        String cacheKey = CacheConstants.buildKey(
+            CacheConstants.ENV_GEOCODE_PREFIX,
+            lat,
+            lng
+        );
+        
+        return cacheService.get(
+            cacheKey,
+            () -> loadReverseGeocode(lat, lng),
+            CacheConstants.ENV_GEOCODE_TIMEOUT,
+            CacheConstants.ENV_GEOCODE_UNIT,
+            String.class
+        );
+    }
+    
+    /**
+     * 加载逆地理编码（实际逻辑）
+     */
+    private String loadReverseGeocode(BigDecimal lat, BigDecimal lng) {
+        try {
+            String location = lat + "," + lng;
+            String url = String.format(
+                    "https://api.map.baidu.com/reverse_geocoding/v3/?ak=%s&output=json&coordtype=wgs84ll&location=%s",
+                    baiduAk, location
+            );
+            String result = HttpUtil.get(url);
+            JSONObject json = JSONUtil.parseObj(result);
+            
+            if (json.getInt("status") == 0) {
+                return json.getJSONObject("result").getStr("formatted_address");
+            }
+        } catch (Exception e) {
+            log.error("逆地理编码失败", e);
+        }
+        return "位置信息获取失败";
+    }
+
     /**
      * 根据adcode获取天气
      */
@@ -138,26 +223,6 @@ public class EnvContextServiceImpl implements EnvContextService {
             log.error("获取天气失败", e);
         }
         return null;
-    }
-
-    @Override
-    public String reverseGeocode(BigDecimal lat, BigDecimal lng) {
-        try {
-            String location = lat + "," + lng;
-            String url = String.format(
-                    "https://api.map.baidu.com/reverse_geocoding/v3/?ak=%s&output=json&coordtype=wgs84ll&location=%s",
-                    baiduAk, location
-            );
-            String result = HttpUtil.get(url);
-            JSONObject json = JSONUtil.parseObj(result);
-            
-            if (json.getInt("status") == 0) {
-                return json.getJSONObject("result").getStr("formatted_address");
-            }
-        } catch (Exception e) {
-            log.error("逆地理编码失败", e);
-        }
-        return "位置信息获取失败";
     }
 
     /**

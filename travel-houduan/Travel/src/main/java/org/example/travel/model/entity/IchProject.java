@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.Date;
 import lombok.Data;
@@ -14,7 +15,9 @@ import lombok.Data;
  */
 @TableName(value ="ich_project")
 @Data
-public class IchProject {
+public class IchProject implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
     /**
      * 非遗项目ID
      */

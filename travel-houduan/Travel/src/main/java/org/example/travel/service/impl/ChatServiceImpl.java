@@ -18,6 +18,7 @@ import org.example.travel.model.entity.ChatMessage;
 import org.example.travel.service.ChatConversationService;
 import org.example.travel.service.ChatMessageService;
 import org.example.travel.service.ChatService;
+import org.example.travel.service.VisionService;
 import org.example.travel.tools.PDFGenerationTool;
 import org.example.travel.tools.RecommendTool;
 import org.springframework.ai.chat.client.ChatClient;
@@ -26,10 +27,12 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -55,12 +58,25 @@ public class ChatServiceImpl implements ChatService {
     @Resource
     private ChatDataExtractorService dataExtractorService;
 
+    @Resource
+    @org.springframework.beans.factory.annotation.Qualifier("toolExecutor")
+    private java.util.concurrent.Executor toolExecutor;
+
+    @Resource
+    private org.example.travel.service.AICacheService aiCacheService;
+
+    @Resource
+    private VisionService visionService;
+    
+    @Resource
+    private org.example.travel.manager.CosManager cosManager;
+
     @Override
     public SseEmitter chat(ChatRequest request, EnvContextDTO envContext, Long userId) {
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
         final Long finalConversationId;
-        
+
         // 获取或创建会话
         if (request.getConversationId() != null) {
             // 验证会话归属
@@ -81,60 +97,95 @@ public class ChatServiceImpl implements ChatService {
                 // 设置工具的用户上下文
                 PDFGenerationTool.setCurrentUserId(userId);
                 RecommendTool.setCurrentUserId(userId);
-                
+
                 // 发送 start 事件（包含会话ID）
                 emitter.send(JSONUtil.toJsonStr(StreamChunk.start(finalConversationId)));
-                
+
                 // 保存用户消息
                 saveMessage(finalConversationId, "user", request.getMessage(), null);
 
-                // 创建 ChatClient
-                ChatClient chatClient = ChatClient.builder(chatModel).build();
+                // ===== AI 响应缓存检查 =====
+                String envDescription = envContext != null ? envContext.getDescription() : null;
+                String cacheKey = aiCacheService.generateCacheKey(
+                        request.getMessage(),
+                        "TravelAgent",  // 简化版，不使用完整提示词
+                        envDescription
+                );
 
-                // 创建 TravelAgent
-                TravelAgent agent = new TravelAgent(allTools, chatClient);
-                
-                // 设置工具调用回调，实时提取地点数据
-                agent.setToolCallCallback((toolName, toolResult) -> {
-                    List<LocationData> locations = dataExtractorService.extractLocationsFromToolResult(toolName, toolResult);
-                    extractedLocations.addAll(locations);
-                });
-                
-                // 设置环境上下文
-                if (envContext != null && envContext.getDescription() != null) {
-                    agent.setEnvContext(envContext.getDescription());
+                // 判断是否应该使用缓存
+                boolean shouldUseCache = aiCacheService.shouldCache(request.getMessage());
+                String cachedResponse = null;
+
+                if (shouldUseCache) {
+                    cachedResponse = aiCacheService.getCachedResponse(cacheKey);
                 }
 
-                // 加载历史消息到Agent上下文
-                loadHistoryToAgent(agent, finalConversationId);
+                String finalAnswer;
 
-                // 执行Agent（工具调用阶段）- 这里会调用工具
-                String result = agent.run(request.getMessage());
-                
-                // 提取最终回答（必须在 agent.run() 之后、cleanup 之前）
-                String finalAnswer = extractFinalAnswer(result, agent);
-                
-                // 清理工具调用结果
-                agent.clearToolCallResults();
+                if (cachedResponse != null) {
+                    // 缓存命中，直接使用
+                    log.info("使用缓存的 AI 响应，节省 AI 调用");
+                    finalAnswer = cachedResponse;
+                } else {
+                    // 缓存未命中，执行 Agent
+                    log.info("缓存未命中，执行 Agent");
 
-                // 流式输出
+                    // 创建 ChatClient
+                    ChatClient chatClient = ChatClient.builder(chatModel).build();
+
+                    // 创建 TravelAgent（传入线程池以支持并行工具调用）
+                    TravelAgent agent = new TravelAgent(allTools, chatClient, toolExecutor);
+
+                    // 设置工具调用回调，实时提取地点数据
+                    agent.setToolCallCallback((toolName, toolResult) -> {
+                        List<LocationData> locations = dataExtractorService.extractLocationsFromToolResult(toolName, toolResult);
+                        extractedLocations.addAll(locations);
+                    });
+
+                    // 设置环境上下文
+                    if (envContext != null && envContext.getDescription() != null) {
+                        agent.setEnvContext(envContext.getDescription());
+                    }
+
+                    // 加载历史消息到Agent上下文
+                    loadHistoryToAgent(agent, finalConversationId);
+
+                    // 执行Agent（工具调用阶段）
+                    // 注意：run() 是同步的，会阻塞当前异步线程直到完成
+                    // 这是合理的，因为我们需要等待 Agent 完成才能提取最终答案
+                    String result = agent.run(request.getMessage());
+
+                    // 提取最终回答（必须在 agent.run() 之后、cleanup 之前）
+                    finalAnswer = extractFinalAnswer(result, agent);
+
+                    // 清理工具调用结果
+                    agent.clearToolCallResults();
+
+                    // ===== 缓存 AI 响应 =====
+                    if (finalAnswer != null && !finalAnswer.isEmpty() && shouldUseCache) {
+                        long ttl = aiCacheService.getAppropriateTTL(request.getMessage());
+                        aiCacheService.cacheResponse(cacheKey, finalAnswer, ttl);
+                    }
+                }
+
+                // 流式输出最终答案
                 if (StrUtil.isNotBlank(finalAnswer)) {
-                    // 流式输出文本内容
+                    // 流式输出文本内容（逐字输出，提升用户体验）
                     streamTextContent(emitter, finalAnswer);
-                    
+
                     // 如果有地点数据，去重后发送 location 事件
                     if (!extractedLocations.isEmpty()) {
                         List<LocationData> uniqueLocations = deduplicateLocations(extractedLocations);
                         emitter.send(JSONUtil.toJsonStr(StreamChunk.location(uniqueLocations)));
                     }
-                    
+
                     // 发送 done 事件（携带会话ID和状态）
                     emitter.send(JSONUtil.toJsonStr(StreamChunk.done(finalConversationId)));
-                    
+
                     // 保存助手回复
                     String toolCallJson = extractedLocations.isEmpty() ? null : JSONUtil.toJsonStr(extractedLocations);
                     saveMessage(finalConversationId, "assistant", finalAnswer, toolCallJson);
-                    
+
                     // 更新会话标题
                     updateConversationTitleIfNeeded(finalConversationId, request.getMessage());
 
@@ -181,19 +232,19 @@ public class ChatServiceImpl implements ChatService {
     private void streamTextContent(SseEmitter emitter, String content) throws IOException {
         // 先将转义的换行符还原
         content = content.replace("\\n", "\n");
-        
+
         // 按段落分割（双换行）
         String[] paragraphs = content.split("\n\n");
-        
+
         for (String paragraph : paragraphs) {
             if (StrUtil.isNotBlank(paragraph)) {
                 // 段落内按句子分割
                 String[] sentences = paragraph.split("(?<=[。！？])|(?<=\\. )|(?<=! )|(?<=\\? )");
-                
+
                 for (String sentence : sentences) {
                     if (StrUtil.isNotBlank(sentence)) {
                         emitter.send(JSONUtil.toJsonStr(StreamChunk.text(sentence.trim())));
-                        
+
                         try {
                             Thread.sleep(30);
                         } catch (InterruptedException e) {
@@ -201,7 +252,7 @@ public class ChatServiceImpl implements ChatService {
                         }
                     }
                 }
-                
+
                 // 段落之间发送换行
                 emitter.send(JSONUtil.toJsonStr(StreamChunk.text("\n\n")));
             }
@@ -213,13 +264,13 @@ public class ChatServiceImpl implements ChatService {
      */
     private List<LocationData> deduplicateLocations(List<LocationData> locations) {
         java.util.Map<String, LocationData> uniqueMap = new java.util.LinkedHashMap<>();
-        
+
         for (LocationData loc : locations) {
             if (loc.getName() == null) continue;
-            
+
             String key = loc.getName().trim();
             LocationData existing = uniqueMap.get(key);
-            
+
             if (existing == null) {
                 uniqueMap.put(key, loc);
             } else {
@@ -238,7 +289,7 @@ public class ChatServiceImpl implements ChatService {
                 }
             }
         }
-        
+
         return new ArrayList<>(uniqueMap.values());
     }
 
@@ -288,14 +339,14 @@ public class ChatServiceImpl implements ChatService {
                 }
             }
         }
-        
+
         // 2. 检查是否有lastFinalAnswer（AI输出了完整回答但没调用doTerminate的情况）
         String lastFinalAnswer = agent.getLastFinalAnswer();
         if (StrUtil.isNotBlank(lastFinalAnswer) && !isErrorMessage(lastFinalAnswer)) {
             log.info("从lastFinalAnswer提取到最终回答");
             return lastFinalAnswer;
         }
-        
+
         // 3. 从消息列表中获取最后一条助手消息
         List<org.springframework.ai.chat.messages.Message> messages = agent.getMessageList();
         for (int i = messages.size() - 1; i >= 0; i--) {
@@ -307,21 +358,21 @@ public class ChatServiceImpl implements ChatService {
                 }
             }
         }
-        
+
         // 4. 如果都没有找到，返回默认提示
         if (isErrorMessage(agentResult)) {
             return "抱歉，处理您的请求时遇到了一些问题，请稍后再试。";
         }
         return agentResult;
     }
-    
+
     /**
      * 判断是否是错误信息
      */
     private boolean isErrorMessage(String text) {
         if (text == null) return false;
-        return text.contains("Error:") 
-                || text.contains("Exception") 
+        return text.contains("Error:")
+                || text.contains("Exception")
                 || text.contains("failed")
                 || text.contains("Conversion from JSON");
     }
@@ -332,7 +383,7 @@ public class ChatServiceImpl implements ChatService {
     private void updateConversationTitleIfNeeded(Long conversationId, String firstMessage) {
         ChatConversation conversation = conversationService.getById(conversationId);
         if (conversation != null && "新对话".equals(conversation.getTitle())) {
-            String title = firstMessage.length() > 20 ? 
+            String title = firstMessage.length() > 20 ?
                     firstMessage.substring(0, 20) + "..." : firstMessage;
             conversation.setTitle(title);
             conversationService.updateById(conversation);
@@ -397,12 +448,12 @@ public class ChatServiceImpl implements ChatService {
         if (conversation == null || !conversation.getUserId().equals(userId)) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "会话不存在");
         }
-        
+
         // 删除会话消息
         messageService.lambdaUpdate()
                 .eq(ChatMessage::getConversationId, conversationId)
                 .remove();
-        
+
         // 删除会话
         return conversationService.removeById(conversationId);
     }
@@ -425,11 +476,177 @@ public class ChatServiceImpl implements ChatService {
         }
         message.setCreatedAt(new Date());
         messageService.save(message);
-        
+
         // 更新会话的更新时间
         ChatConversation conversation = new ChatConversation();
         conversation.setId(conversationId);
         conversation.setUpdatedAt(new Date());
         conversationService.updateById(conversation);
     }
+    
+    
+    @Override
+    public SseEmitter chatWithImage(org.springframework.web.multipart.MultipartFile file,
+                                    Long conversationId,
+                                    String message,
+                                    EnvContextDTO envContext,
+                                    Long userId) {
+        SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
+
+        final Long finalConversationId;
+
+        // 获取或创建会话
+        if (conversationId != null) {
+            // 验证会话归属
+            ChatConversation conversation = conversationService.getById(conversationId);
+            if (conversation == null || !conversation.getUserId().equals(userId)) {
+                throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "会话不存在");
+            }
+            finalConversationId = conversationId;
+        } else {
+            finalConversationId = createConversation(userId);
+        }
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 发送 start 事件（包含会话ID）
+                emitter.send(JSONUtil.toJsonStr(StreamChunk.start(finalConversationId)));
+
+                // 1. 先上传图片到 COS
+                log.info("开始上传图片到 COS: filename={}, size={}", file.getOriginalFilename(), file.getSize());
+                String imageKey = "chat/images/" + System.currentTimeMillis() + "_" + file.getOriginalFilename();
+                
+                try {
+                    cosManager.putObject(file, imageKey);  // 参数顺序：(MultipartFile, String)
+                    log.info("图片上传成功: {}", imageKey);
+                } catch (Exception e) {
+                    log.error("图片上传失败", e);
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.error("图片上传失败")));
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.doneWithError(finalConversationId)));
+                    emitter.complete();
+                    return;
+                }
+                
+                // 获取图片 URL
+                String imageUrl = cosManager.getObjectUrl(imageKey);
+                log.info("图片 URL: {}", imageUrl);
+
+                // 2. 识别图片
+                log.info("开始识别图片");
+                String recognitionResult = visionService.recognizeImage(imageUrl,
+                        "请识别图片中的内容，如果是非遗相关的工艺品、建筑或美食，请详细描述其特征。");
+
+                if (recognitionResult == null || recognitionResult.isEmpty()) {
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.error("图片识别失败")));
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.doneWithError(finalConversationId)));
+                    emitter.complete();
+                    return;
+                }
+
+                // 3. 保存用户消息（图片类型，包含图片 URL）
+                String userMessage = message != null && !message.trim().isEmpty() ?
+                        message : "[用户上传了一张图片]";
+                String userToolCall = JSONUtil.toJsonStr(Map.of(
+                    "type", "image",
+                    "url", imageUrl
+                ));
+                saveMessage(finalConversationId, "user", userMessage, userToolCall);
+
+                // 4. 构建 AI 提示词
+                String aiPrompt = buildImagePrompt(recognitionResult, message);
+
+                // 5. 调用 AI 生成回复
+                ChatClient chatClient = ChatClient.builder(chatModel).build();
+                TravelAgent agent = new TravelAgent(allTools, chatClient, toolExecutor);
+
+                // 设置环境上下文
+                if (envContext != null && envContext.getDescription() != null) {
+                    agent.setEnvContext(envContext.getDescription());
+                }
+
+                // 加载历史消息到Agent上下文
+                loadHistoryToAgent(agent, finalConversationId);
+
+                // 执行Agent
+                String result = agent.run(aiPrompt);
+
+                // 提取最终回答
+                String finalAnswer = extractFinalAnswer(result, agent);
+
+                // 清理工具调用结果
+                agent.clearToolCallResults();
+
+                // 5. 流式输出最终答案
+                if (StrUtil.isNotBlank(finalAnswer)) {
+                    // 流式输出文本内容
+                    streamTextContent(emitter, finalAnswer);
+
+                    // 发送 done 事件
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.done(finalConversationId)));
+
+                    // 保存助手回复（包含图片识别结果）
+                    String assistantMessage = finalAnswer;
+                    String toolCallJson = JSONUtil.toJsonStr(Map.of(
+                            "type", "image_recognition",
+                            "recognition_result", recognitionResult
+                    ));
+                    saveMessage(finalConversationId, "assistant", assistantMessage, toolCallJson);
+
+                    // 更新会话标题
+                    updateConversationTitleIfNeeded(finalConversationId, userMessage);
+
+                    emitter.complete();
+                } else {
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.error("未能获取到回答")));
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.doneWithError(finalConversationId)));
+                    emitter.complete();
+                }
+
+            } catch (Exception e) {
+                log.error("图片聊天处理异常", e);
+                try {
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.error("抱歉，系统出现了问题，请稍后重试")));
+                    emitter.send(JSONUtil.toJsonStr(StreamChunk.doneWithError(finalConversationId)));
+                    emitter.complete();
+                } catch (IOException ex) {
+                    emitter.completeWithError(ex);
+                }
+            }
+        });
+
+        // 设置超时和完成回调
+        emitter.onTimeout(() -> {
+            log.warn("SSE连接超时");
+            emitter.complete();
+        });
+
+        emitter.onCompletion(() -> {
+            log.info("SSE连接完成");
+        });
+
+        return emitter;
+    }
+
+    /**
+     * 构建图片识别的 AI 提示词
+     */
+    private String buildImagePrompt(String recognitionResult, String userMessage) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("用户上传了一张图片，图片识别结果如下：\n\n");
+        prompt.append(recognitionResult);
+        prompt.append("\n\n");
+
+        if (userMessage != null && !userMessage.trim().isEmpty()) {
+            prompt.append("用户的问题：").append(userMessage).append("\n\n");
+        }
+
+        prompt.append("请根据图片识别结果，为用户提供详细的介绍和建议。");
+        prompt.append("如果识别出的是非遗相关内容，请：\n");
+        prompt.append("1. 介绍该非遗项目的历史渊源和文化内涵\n");
+        prompt.append("2. 推荐相关的非遗项目和体验地点\n");
+        prompt.append("3. 提供参观建议和注意事项\n");
+
+        return prompt.toString();
+    }
+
 }

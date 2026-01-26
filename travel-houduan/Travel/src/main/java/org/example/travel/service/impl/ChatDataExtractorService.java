@@ -87,14 +87,25 @@ public class ChatDataExtractorService {
         List<LocationData> locations = new ArrayList<>();
         
         try {
-            if (jsonResult.startsWith("[")) {
-                JSONArray array = JSONUtil.parseArray(jsonResult);
+            // 跳过非 JSON 格式的结果
+            if (jsonResult == null || jsonResult.trim().isEmpty()) {
+                return locations;
+            }
+            
+            String trimmed = jsonResult.trim();
+            if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+                // 不是 JSON 格式，可能是错误消息或提示文本
+                return locations;
+            }
+            
+            if (trimmed.startsWith("[")) {
+                JSONArray array = JSONUtil.parseArray(trimmed);
                 for (int i = 0; i < array.size(); i++) {
                     JSONObject obj = array.getJSONObject(i);
                     locations.add(convertProjectToLocation(obj));
                 }
-            } else if (jsonResult.startsWith("{")) {
-                JSONObject obj = JSONUtil.parseObj(jsonResult);
+            } else if (trimmed.startsWith("{")) {
+                JSONObject obj = JSONUtil.parseObj(trimmed);
                 locations.add(convertProjectToLocation(obj));
             }
         } catch (Exception e) {
@@ -111,14 +122,25 @@ public class ChatDataExtractorService {
         List<LocationData> locations = new ArrayList<>();
         
         try {
-            if (jsonResult.startsWith("[")) {
-                JSONArray array = JSONUtil.parseArray(jsonResult);
+            // 跳过非 JSON 格式的结果
+            if (jsonResult == null || jsonResult.trim().isEmpty()) {
+                return locations;
+            }
+            
+            String trimmed = jsonResult.trim();
+            if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+                // 不是 JSON 格式，可能是错误消息或提示文本
+                return locations;
+            }
+            
+            if (trimmed.startsWith("[")) {
+                JSONArray array = JSONUtil.parseArray(trimmed);
                 for (int i = 0; i < array.size(); i++) {
                     JSONObject obj = array.getJSONObject(i);
                     locations.add(convertMerchantToLocation(obj));
                 }
-            } else if (jsonResult.startsWith("{")) {
-                JSONObject obj = JSONUtil.parseObj(jsonResult);
+            } else if (trimmed.startsWith("{")) {
+                JSONObject obj = JSONUtil.parseObj(trimmed);
                 locations.add(convertMerchantToLocation(obj));
             }
         } catch (Exception e) {

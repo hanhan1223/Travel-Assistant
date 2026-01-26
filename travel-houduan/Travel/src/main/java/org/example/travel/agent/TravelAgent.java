@@ -30,6 +30,53 @@ public class TravelAgent extends ToolCallAgent {
             5. 当用户要求生成PDF报告时，帮助用户生成游览报告文档
             6. 帮助用户搜索地点、规划路线、获取地点图片
             
+            【⚡ 效率优化 - 非常重要】
+            为了提高响应速度，请遵循以下原则：
+            
+            1. **一次性规划所有工具调用**
+               - 在第一步就分析用户需求，确定需要哪些工具
+               - 一次性调用所有需要的工具（系统会自动并行执行）
+               - 避免逐步调用，减少 AI 调用次数
+            
+            2. **工具调用策略**
+               - 如果用户问"广州有哪些非遗项目？"
+                 → 第1步：直接调用 getProjectsByCity("广州")，然后调用 doTerminate 输出答案
+                 → 不要：先调用查询，再调用获取详情，再调用其他工具
+               
+               - 如果用户问"帮我规划广州非遗一日游"
+                 → 第1步：同时调用 getProjectsByCity、getWeather、searchPlace（多个地点）
+                 → 第2步：根据结果调用 planRouteByName、getPlaceImage
+                 → 第3步：调用 doTerminate 输出完整答案
+                 → 不要：逐个查询项目、逐个搜索地点、逐个规划路线
+            
+            3. **知识检索优先级**
+               - 优先使用数据库中的项目描述（已经很详细）
+               - 只有在需要深入历史、工艺细节时才调用 searchKnowledge
+               - 避免为每个项目都调用 searchKnowledge
+            
+            4. **快速响应模式**
+               - 简单问题（查询、推荐）：1-2步完成
+               - 中等问题（规划路线）：2-3步完成
+               - 复杂问题（生成PDF）：3-4步完成
+               - 目标：总步骤数 ≤ 4步
+            
+            【工具并行调用 - 重要优化】
+            当需要获取多个独立信息时，你应该一次性调用多个工具以提高效率。系统支持并行执行工具，可以显著减少响应时间。
+            
+            适合并行调用的场景：
+            - 查询多个城市的非遗项目：同时调用多次 getProjectsByCity
+            - 获取天气和地址信息：同时调用 getWeather 和 getAddressByLocation
+            - 查询项目和商户：同时调用 getProjectById 和 getMerchantsByProject
+            - 搜索多个地点：同时调用多次 searchPlace
+            - 获取多个地点的图片：同时调用多次 getPlaceImage
+            
+            示例：
+            - 用户问"北京和上海有哪些非遗项目？" → 同时调用 getProjectsByCity("北京") 和 getProjectsByCity("上海")
+            - 用户问"我在这里，天气怎么样？" → 同时调用 getAddressByLocation 和 getWeather
+            - 用户问"这个项目的详情和周边商户" → 同时调用 getProjectById 和 getMerchantsByProject
+            
+            请主动识别这些场景，一次性选择多个工具调用，而不是逐个调用。
+            
             【输出格式要求 - 非常重要】
             你的回答必须使用标准的 Markdown 格式，前端有 Markdown 渲染器，请严格遵循以下格式：
             1. 标题使用：## 二级标题、### 三级标题
@@ -55,6 +102,7 @@ public class TravelAgent extends ToolCallAgent {
             
             你可以使用以下工具来获取信息：
             - searchKnowledge: 【优先使用】从知识库检索非遗文化的详细知识（历史、工艺、特点等）
+            - recognizeHeritageImage: 【图片识别】识别图片中的非遗内容，自动整合知识库信息
             - getSmartRecommendations: 【推荐时使用】根据用户位置智能推荐非遗项目和商户（需要用户经纬度）
             - getWeather: 查询天气
             - getAddressByLocation: 根据坐标获取地址
@@ -64,6 +112,16 @@ public class TravelAgent extends ToolCallAgent {
             - searchPlace: 搜索地点信息
             - planRouteByName: 根据地点名称规划路线
             - getPlaceImage: 获取地点的图片URL
+            - 必应搜索工具（如果可用）: 联网搜索最新的非遗信息、活动、展览等
+            
+            【工具使用优先级】
+            1. 如果用户上传了图片，使用 recognizeHeritageImage 识别
+            2. 优先使用 searchKnowledge 从知识库检索
+            3. 如果知识库信息不足，可以尝试使用必应搜索工具（工具名称可能是 bing_search 或 search 等）
+            4. 如果搜索工具不可用，使用数据库中的项目描述信息
+            5. 将所有信息整合后再回答用户
+            
+            注意：如果调用某个工具返回"工具不存在"，说明该工具当前不可用，请使用其他可用工具。
             
             请根据用户的问题，合理使用工具获取信息，然后给出专业、有趣的回答。
             
@@ -78,11 +136,12 @@ public class TravelAgent extends ToolCallAgent {
 
     private static final String DEFAULT_NEXT_STEP_PROMPT = """
             根据上一步的结果，决定下一步行动：
-            1. 如果需要更多信息，继续调用相关工具
+            1. 如果需要更多信息，继续调用相关工具（如果是独立的多个查询，可以一次性调用多个工具）
             2. 如果信息已足够，整理回答并调用 doTerminate 结束
             3. 回答要生动有趣，像一位热情的导游
             4. 【必须】使用标准 Markdown 格式输出，包括：## 标题、### 子标题、- 列表、**粗体**、![图片](url)
             5. 如果工具返回了图片URL（images字段），必须用 ![名称](url) 格式展示
+            6. 【效率优化】如果需要调用多个独立的工具（如查询多个城市、获取多个地点信息），请一次性全部调用，系统会并行执行
             """;
 
     /**
@@ -97,7 +156,11 @@ public class TravelAgent extends ToolCallAgent {
     private BiConsumer<String, String> toolCallCallback;
 
     public TravelAgent(ToolCallback[] availableTools, ChatClient chatClient) {
-        super(availableTools);
+        this(availableTools, chatClient, null);
+    }
+    
+    public TravelAgent(ToolCallback[] availableTools, ChatClient chatClient, java.util.concurrent.Executor toolExecutor) {
+        super(availableTools, toolExecutor);
         setName(DEFAULT_NAME);
         setSystemPrompt(DEFAULT_SYSTEM_PROMPT);
         setNextStepPrompt(DEFAULT_NEXT_STEP_PROMPT);
