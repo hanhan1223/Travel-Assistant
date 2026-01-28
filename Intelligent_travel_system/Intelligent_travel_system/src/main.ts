@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 import 'vant/lib/index.css'
 import App from './App.vue'
 import router from './router'
@@ -12,7 +13,11 @@ import 'vant/lib/index.css'
 
 const app = createApp(App)
 
-app.use(createPinia())
+// 创建 Pinia 实例并添加持久化插件
+const pinia = createPinia()
+pinia.use(piniaPluginPersistedstate)
+
+app.use(pinia)
 app.use(router)
 
 // 3. 注册 Vant 组件库

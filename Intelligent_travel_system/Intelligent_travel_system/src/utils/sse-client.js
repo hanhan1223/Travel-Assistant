@@ -40,14 +40,9 @@ var SSEClient = /** @class */ (function () {
         this.controller = null;
         this.url = url;
     }
-    /**
-     * 连接 SSE 流
-     * @param body 请求体参数
-     * @param onMessage 消息回调
-     */
     SSEClient.prototype.connect = function (body, onMessage) {
         return __awaiter(this, void 0, void 0, function () {
-            var response, reader, decoder, buffer, _a, done, value, parts, _i, parts_1, part, lines, eventType, dataStr, _b, lines_1, line, parsedData, error_1;
+            var headers, requestBody, response, reader, decoder, buffer, _a, done, value, parts, _i, parts_1, part, lines, eventType, dataStr, _b, lines_1, line, parsedData, error_1;
             return __generator(this, function (_c) {
                 switch (_c.label) {
                     case 0:
@@ -55,14 +50,20 @@ var SSEClient = /** @class */ (function () {
                         _c.label = 1;
                     case 1:
                         _c.trys.push([1, 6, 7, 8]);
+                        headers = {};
+                        requestBody = body;
+                        // ✅ 关键修改：如果是 FormData，不要设置 Content-Type，让浏览器自动处理 Boundary
+                        // 否则保持 application/json
+                        if (!(body instanceof FormData)) {
+                            headers['Content-Type'] = 'application/json';
+                            requestBody = JSON.stringify(body);
+                        }
                         return [4 /*yield*/, fetch(this.url, {
                                 method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                },
-                                body: JSON.stringify(body),
+                                headers: headers,
+                                body: requestBody,
                                 signal: this.controller.signal,
-                                credentials: 'include', // 携带 Cookie
+                                credentials: 'include',
                             })];
                     case 2:
                         response = _c.sent();
@@ -85,7 +86,6 @@ var SSEClient = /** @class */ (function () {
                             return [3 /*break*/, 5];
                         buffer += decoder.decode(value, { stream: true });
                         parts = buffer.split('\n\n');
-                        // 保留最后一个可能不完整的片段
                         buffer = parts.pop() || '';
                         for (_i = 0, parts_1 = parts; _i < parts_1.length; _i++) {
                             part = parts_1[_i];
@@ -113,22 +113,18 @@ var SSEClient = /** @class */ (function () {
                                     parsedData = JSON.parse(dataStr);
                                 }
                                 catch (e) {
-                                    // 无法解析为 JSON，保持原字符串
+                                    // ignore
                                 }
                                 onMessage({ event: eventType, data: parsedData });
                             }
                         }
                         return [3 /*break*/, 3];
                     case 5:
-                        // 流结束
                         onMessage({ event: 'done', data: null });
                         return [3 /*break*/, 8];
                     case 6:
                         error_1 = _c.sent();
-                        if (error_1.name === 'AbortError') {
-                            console.log('SSE connection aborted');
-                        }
-                        else {
+                        if (error_1.name !== 'AbortError') {
                             console.error('SSE Error:', error_1);
                             onMessage({ event: 'error', data: error_1.message });
                         }
@@ -141,9 +137,6 @@ var SSEClient = /** @class */ (function () {
             });
         });
     };
-    /**
-     * 中断连接
-     */
     SSEClient.prototype.abort = function () {
         if (this.controller) {
             this.controller.abort();

@@ -1,0 +1,1 @@
+import{s as e}from"./index-Bh04lDP-.js";const c=t=>e({url:"/ich/project/listWithMedia",method:"POST",data:t}),d=t=>e({url:"/ich/project/add",method:"POST",data:t}),s=(t,r)=>e({url:`/ich/project/update/${t}`,method:"PUT",data:r}),a=t=>e({url:`/ich/project/${t}`,method:"DELETE"});export{d as a,a as d,c as g,s as u};

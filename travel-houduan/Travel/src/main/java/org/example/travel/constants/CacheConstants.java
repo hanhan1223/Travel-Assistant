@@ -58,12 +58,7 @@ public class CacheConstants {
     public static final String RECOMMEND_PREFIX = "recommend:";
     public static final long RECOMMEND_TIMEOUT = 5; // 5分钟
     public static final TimeUnit RECOMMEND_UNIT = TimeUnit.MINUTES;
-    
-    // ========== AI 响应缓存 ==========
-    public static final String AI_RESPONSE_PREFIX = "ai:response:";
-    public static final long AI_RESPONSE_TIMEOUT = 1; // 1小时
-    public static final long AI_RESPONSE_COMMON_TIMEOUT = 24; // 24小时（常见问题）
-    public static final TimeUnit AI_RESPONSE_UNIT = TimeUnit.HOURS;
+
     
     /**
      * 构建缓存 key

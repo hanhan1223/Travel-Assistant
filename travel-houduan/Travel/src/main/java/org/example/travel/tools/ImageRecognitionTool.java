@@ -94,7 +94,7 @@ public class ImageRecognitionTool {
             String knowledgeResult = "";
             if (StrUtil.isNotBlank(keywords)) {
                 try {
-                    knowledgeResult = knowledgeSearchTool.searchKnowledge(keywords, 3);
+                    knowledgeResult = knowledgeSearchTool.searchKnowledge(keywords);
                     log.info("知识库检索完成，结果长度: {}", knowledgeResult.length());
                 } catch (Exception e) {
                     log.warn("知识库检索失败", e);

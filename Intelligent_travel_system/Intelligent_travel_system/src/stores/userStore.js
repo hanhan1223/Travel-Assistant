@@ -121,7 +121,6 @@ export var useUserStore = defineStore('user', function () {
                     return [4 /*yield*/, http.get('/user/get/login')];
                 case 1:
                     res = _a.sent();
-                    // 现在的 res 被 TS 认为是 UserInfo 类型，拥有 id 属性
                     if (res && res.id) {
                         userInfo.value = res;
                     }
@@ -129,6 +128,8 @@ export var useUserStore = defineStore('user', function () {
                 case 2:
                     error_4 = _a.sent();
                     console.error('获取用户信息失败:', error_4);
+                    // 如果获取失败，清空本地存储的用户信息
+                    userInfo.value = null;
                     return [3 /*break*/, 3];
                 case 3: return [2 /*return*/];
             }
@@ -271,4 +272,10 @@ export var useUserStore = defineStore('user', function () {
         updatePassword: updatePassword,
         fetchDocuments: fetchDocuments
     };
+}, {
+    // 持久化配置
+    persist: {
+        key: 'travel-user',
+        storage: localStorage,
+    }
 });

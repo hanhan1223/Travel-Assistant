@@ -2,6 +2,7 @@ package org.example.travel.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.example.travel.model.dto.chat.ChatRequest;
+import org.example.travel.model.dto.chat.VisionChatRequest;
 import org.example.travel.model.dto.env.EnvContextDTO;
 import org.example.travel.model.entity.ChatConversation;
 import org.example.travel.model.entity.ChatMessage;
@@ -22,21 +23,34 @@ public interface ChatService {
      * @return SSE发射器
      */
     SseEmitter chat(ChatRequest request, EnvContextDTO envContext, Long userId);
-    
+
     /**
-     * 发送图片消息并获取流式响应（支持图片识别）
-     * @param file 图片文件
-     * @param conversationId 会话ID（可选）
-     * @param message 附加文本消息（可选）
+     * 图像识别聊天（使用独立的 VisionAgent）
+     * @param request 图像识别聊天请求
      * @param envContext 环境上下文
      * @param userId 用户ID
      * @return SSE发射器
      */
-    SseEmitter chatWithImage(org.springframework.web.multipart.MultipartFile file, 
-                             Long conversationId, 
-                             String message, 
-                             EnvContextDTO envContext, 
-                             Long userId);
+    SseEmitter visionChat(VisionChatRequest request, EnvContextDTO envContext, Long userId);
+
+    /**
+     * 图片消息聊天（文件上传方式）
+     * @param file 图片文件
+     * @param conversationId 会话ID（可选）
+     * @param message 用户消息（可选）
+     * @param recognitionType 识别类型（craft/building/food/general）
+     * @param envContext 环境上下文
+     * @param userId 用户ID
+     * @return SSE发射器
+     */
+    SseEmitter chatWithImage(
+            org.springframework.web.multipart.MultipartFile file,
+            Long conversationId,
+            String message,
+            String recognitionType,
+            EnvContextDTO envContext,
+            Long userId
+    );
 
     /**
      * 创建新会话
