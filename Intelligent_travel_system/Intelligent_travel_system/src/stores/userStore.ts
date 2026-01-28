@@ -44,7 +44,6 @@ export const useUserStore = defineStore('user', () => {
   // 登录
   const login = async (payload: LoginRequest) => {
     try {
-      // 这里添加类型断言，虽然这里没报错，但保持一致是个好习惯
       const res = await http.post<UserInfo>('/user/login/email', payload) as unknown as UserInfo;
       userInfo.value = res; 
       showToast('登录成功');
@@ -58,14 +57,14 @@ export const useUserStore = defineStore('user', () => {
   // 获取用户信息
   const fetchUserInfo = async () => {
     try {
-      // 【修复点 1】：添加 as unknown as UserInfo 类型断言
       const res = await http.get<UserInfo>('/user/get/login') as unknown as UserInfo;
-      // 现在的 res 被 TS 认为是 UserInfo 类型，拥有 id 属性
       if (res && res.id) {
         userInfo.value = res;
       }
     } catch (error) {
       console.error('获取用户信息失败:', error);
+      // 如果获取失败，清空本地存储的用户信息
+      userInfo.value = null;
     }
   };
 
@@ -79,7 +78,6 @@ export const useUserStore = defineStore('user', () => {
       userInfo.value = null;
       documentList.value = [];
       showToast('已退出登录');
-      // 可以选择跳转到登录页
     }
   };
 
@@ -88,11 +86,6 @@ export const useUserStore = defineStore('user', () => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      // 【修复点 2】：添加 as unknown as string 类型断言
-      // 假设后端返回的数据就是 url 字符串，或者是包含 url 的对象。
-      // 根据你的 index.vue 报错，这里预期返回 string。
-      // 如果后端返回的是 { url: '...' }，请相应修改类型。
-      // 这里假设拦截器处理后直接返回了 URL 字符串。
       const res = await http.post<string>('/file/test/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       }) as unknown as string;
@@ -153,7 +146,6 @@ export const useUserStore = defineStore('user', () => {
   // 获取文档列表
   const fetchDocuments = async () => {
     try {
-      // 这里的 any 可以保留，或者定义更精确的类型
       const res = await http.post('/document/my', { current: 1, pageSize: 20 }) as any;
       documentList.value = res.records || [];
     } catch (error) {
@@ -174,4 +166,10 @@ export const useUserStore = defineStore('user', () => {
     updatePassword,
     fetchDocuments
   };
+}, {
+  // 持久化配置
+  persist: {
+    key: 'travel-user',
+    storage: localStorage,
+  }
 });

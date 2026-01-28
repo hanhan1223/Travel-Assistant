@@ -12,13 +12,11 @@ import org.example.travel.service.IchProjectService;
 import org.example.travel.mapper.IchProjectMapper;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
  * 非遗项目服务实现
  * 支持自动向量化到 ich_project_vector 表
- * 使用 Redis 缓存提升查询性能
  */
 @Service
 @Slf4j
@@ -33,7 +31,10 @@ public class IchProjectServiceImpl extends ServiceImpl<IchProjectMapper, IchProj
 
     @Override
     public IchProject getById(java.io.Serializable id) {
-        // 使用缓存
+        if (id == null) {
+            return null;
+        }
+        
         String cacheKey = CacheConstants.buildKey(CacheConstants.ICH_PROJECT_PREFIX, id);
         return cacheService.get(
             cacheKey,
@@ -43,37 +44,18 @@ public class IchProjectServiceImpl extends ServiceImpl<IchProjectMapper, IchProj
             IchProject.class
         );
     }
-    
-    /**
-     * 按类别和城市查询项目列表（带缓存）
-     */
-    public List<IchProject> listByCategory(String category, String city) {
-        String cacheKey = CacheConstants.buildKey(
-            CacheConstants.ICH_PROJECT_LIST_PREFIX, 
-            category, 
-            city != null ? city : "all"
-        );
-        
-        return cacheService.getList(
-            cacheKey,
-            () -> lambdaQuery()
-                    .eq(IchProject::getCategory, category)
-                    .eq(city != null, IchProject::getCity, city)
-                    .list(),
-            CacheConstants.ICH_PROJECT_LIST_TIMEOUT,
-            CacheConstants.ICH_PROJECT_LIST_UNIT,
-            IchProject.class
-        );
-    }
 
     @Override
     public boolean save(IchProject project) {
         boolean saved = super.save(project);
         if (saved) {
-            // 清空列表缓存
-            cacheService.deletePattern(CacheConstants.ICH_PROJECT_LIST_PREFIX + "*");
             // 异步向量化
             asyncVectorize(project);
+            // 缓存新项目
+            if (project.getId() != null) {
+                String cacheKey = CacheConstants.buildKey(CacheConstants.ICH_PROJECT_PREFIX, project.getId());
+                cacheService.set(cacheKey, project, CacheConstants.ICH_PROJECT_TIMEOUT, CacheConstants.ICH_PROJECT_UNIT);
+            }
         }
         return saved;
     }
@@ -82,14 +64,14 @@ public class IchProjectServiceImpl extends ServiceImpl<IchProjectMapper, IchProj
     public boolean updateById(IchProject project) {
         boolean updated = super.updateById(project);
         if (updated) {
-            // 删除单个项目缓存
-            String cacheKey = CacheConstants.buildKey(CacheConstants.ICH_PROJECT_PREFIX, project.getId());
-            cacheService.delete(cacheKey);
-            // 清空列表缓存
-            cacheService.deletePattern(CacheConstants.ICH_PROJECT_LIST_PREFIX + "*");
+            // 清除缓存
+            if (project.getId() != null) {
+                String cacheKey = CacheConstants.buildKey(CacheConstants.ICH_PROJECT_PREFIX, project.getId());
+                cacheService.delete(cacheKey);
+            }
             
             // 获取完整的项目信息（因为传入的可能只有部分字段）
-            IchProject fullProject = super.getById(project.getId());
+            IchProject fullProject = this.getById(project.getId());
             if (fullProject != null) {
                 asyncVectorize(fullProject);
             }
@@ -101,11 +83,9 @@ public class IchProjectServiceImpl extends ServiceImpl<IchProjectMapper, IchProj
     public boolean removeById(java.io.Serializable id) {
         boolean removed = super.removeById(id);
         if (removed && id instanceof Long) {
-            // 删除单个项目缓存
+            // 清除缓存
             String cacheKey = CacheConstants.buildKey(CacheConstants.ICH_PROJECT_PREFIX, id);
             cacheService.delete(cacheKey);
-            // 清空列表缓存
-            cacheService.deletePattern(CacheConstants.ICH_PROJECT_LIST_PREFIX + "*");
             
             // 异步删除向量
             CompletableFuture.runAsync(() -> {

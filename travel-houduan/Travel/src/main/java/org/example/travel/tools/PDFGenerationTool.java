@@ -185,7 +185,7 @@ public class PDFGenerationTool {
                         }
                         
                         // 设置图片居中
-                        image.setHorizontalAlignment(com.itextpdf.layout.properties.HorizontalAlignment.CENTER);
+                        image.setHorizontalAlignment(HorizontalAlignment.CENTER);
                         image.setMarginBottom(15);
                         image.setMarginTop(5);
                         

@@ -56,7 +56,7 @@ public class ChatController {
 
         return chatService.chat(request, envContext, loginUser.getId());
     }
-    
+
     /**
      * 发送图片消息（支持图片识别）
      * 用户上传图片后，系统会自动识别图片内容并生成回复
@@ -66,6 +66,7 @@ public class ChatController {
             @RequestParam(value = "file") org.springframework.web.multipart.MultipartFile file,
             @RequestParam(value = "conversationId", required = false) Long conversationId,
             @RequestParam(value = "message", required = false) String message,
+            @RequestParam(value = "recognitionType", required = false) String recognitionType,
             @RequestParam(value = "lat", required = false) java.math.BigDecimal lat,
             @RequestParam(value = "lng", required = false) java.math.BigDecimal lng,
             HttpServletRequest httpRequest) {
@@ -91,7 +92,7 @@ public class ChatController {
             envContext = envContextService.getEnvContext(lat, lng);
         }
         
-        return chatService.chatWithImage(file, conversationId, message, envContext, loginUser.getId());
+        return chatService.chatWithImage(file, conversationId, message, recognitionType, envContext, loginUser.getId());
     }
 
     /**

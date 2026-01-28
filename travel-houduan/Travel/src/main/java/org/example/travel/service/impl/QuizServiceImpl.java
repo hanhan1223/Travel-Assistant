@@ -181,9 +181,6 @@ public class QuizServiceImpl implements QuizService {
         // 4. 更新排行榜
         rankingService.updateUserScore(userId, gameRecord.getTotalScore());
         
-        // 5. TODO: 检查成就
-        // achievementService.checkAchievements(userId, gameRecord);
-        
         log.info("游戏完成: userId={}, gameRecordId={}, score={}, accuracy={}",
                 userId, gameRecordId, gameRecord.getTotalScore(), accuracy);
         
@@ -223,12 +220,19 @@ public class QuizServiceImpl implements QuizService {
             // 2. 解析 JSON
             JSONArray jsonArray = JSONUtil.parseArray(jsonContent);
             List<QuizQuestion> questions = new ArrayList<>();
+            List<String> validationErrors = new ArrayList<>();
             
             for (int i = 0; i < jsonArray.size(); i++) {
                 JSONObject jsonObj = jsonArray.getJSONObject(i);
                 
+                // 验证题目完整性
+                String validationError = validateQuestion(jsonObj, i + 1);
+                if (validationError != null) {
+                    validationErrors.add(validationError);
+                    continue; // 跳过不完整的题目
+                }
+                
                 QuizQuestion question = new QuizQuestion();
-                // projectName 和 questionType 不存储到数据库，仅用于缓存分类
                 question.setCategory("非遗知识");
                 question.setDifficulty(difficulty);
                 question.setQuestionText(jsonObj.getStr("questionText"));
@@ -239,13 +243,34 @@ public class QuizServiceImpl implements QuizService {
                 question.setCreatedBy("AI");
                 question.setCreatedAt(new Date());
                 
-                questionMapper.insert(question);
                 questions.add(question);
             }
             
-            log.info("题目保存成功，共 {} 道", questions.size());
+            // 如果有验证错误，记录日志
+            if (!validationErrors.isEmpty()) {
+                log.warn("题目验证失败，跳过不完整的题目: {}", String.join("; ", validationErrors));
+            }
             
-            // 3. 更新缓存
+            // 如果没有任何有效题目，抛出异常
+            if (questions.isEmpty()) {
+                String errorMsg = "生成的题目都不完整，无法入库。错误详情: " + String.join("; ", validationErrors);
+                log.error(errorMsg);
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "题目生成失败：所有题目都不完整");
+            }
+            
+            // 如果有效题目数量不足，记录警告
+            if (questions.size() < count) {
+                log.warn("生成的有效题目数量({})少于请求数量({})", questions.size(), count);
+            }
+            
+            // 3. 保存到数据库
+            for (QuizQuestion question : questions) {
+                questionMapper.insert(question);
+            }
+            
+            log.info("题目保存成功，共 {} 道（请求 {} 道）", questions.size(), count);
+            
+            // 4. 更新缓存
             String cacheKey = CacheConstants.buildKey(
                 CacheConstants.QUIZ_QUESTIONS_PREFIX,
                 projectName,
@@ -260,10 +285,55 @@ public class QuizServiceImpl implements QuizService {
             
             return questions;
             
+        } catch (BusinessException e) {
+            throw e; // 重新抛出业务异常
         } catch (Exception e) {
             log.error("生成并保存题目失败", e);
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "题目生成失败");
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "题目生成失败: " + e.getMessage());
         }
+    }
+    
+    /**
+     * 验证题目完整性
+     * @param jsonObj 题目 JSON 对象
+     * @param index 题目序号（用于错误提示）
+     * @return 如果验证失败返回错误信息，否则返回 null
+     */
+    private String validateQuestion(JSONObject jsonObj, int index) {
+        // 检查必需字段
+        if (jsonObj.getStr("questionText") == null || jsonObj.getStr("questionText").trim().isEmpty()) {
+            return String.format("第%d题缺少题目文本", index);
+        }
+        
+        if (jsonObj.getJSONArray("options") == null || jsonObj.getJSONArray("options").isEmpty()) {
+            return String.format("第%d题缺少选项", index);
+        }
+        
+        List<String> options = jsonObj.getJSONArray("options").toList(String.class);
+        if (options.size() < 2) {
+            return String.format("第%d题选项数量不足（至少需要2个）", index);
+        }
+        
+        // 检查选项是否为空
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i) == null || options.get(i).trim().isEmpty()) {
+                return String.format("第%d题的选项%d为空", index, i + 1);
+            }
+        }
+        
+        if (jsonObj.getStr("correctAnswer") == null || jsonObj.getStr("correctAnswer").trim().isEmpty()) {
+            return String.format("第%d题缺少正确答案", index);
+        }
+        
+        if (jsonObj.getStr("explanation") == null || jsonObj.getStr("explanation").trim().isEmpty()) {
+            return String.format("第%d题缺少答案解析", index);
+        }
+        
+        if (jsonObj.getInt("points") == null || jsonObj.getInt("points") <= 0) {
+            return String.format("第%d题缺少分值或分值无效", index);
+        }
+        
+        return null; // 验证通过
     }
     
     /**

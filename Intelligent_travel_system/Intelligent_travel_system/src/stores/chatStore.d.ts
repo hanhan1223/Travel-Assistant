@@ -135,6 +135,7 @@ export declare const useChatStore: import("pinia").StoreDefinition<"chat", Pick<
         lat: number;
         lng: number;
     }>;
+    sendImageMessage: (file: File, caption?: string) => Promise<void>;
 }, "messages" | "historyList" | "currentConversationId" | "isStreaming" | "envContext" | "userLocation">, Pick<{
     messages: import("vue").Ref<{
         isLoading?: boolean | undefined;
@@ -266,6 +267,7 @@ export declare const useChatStore: import("pinia").StoreDefinition<"chat", Pick<
         lat: number;
         lng: number;
     }>;
+    sendImageMessage: (file: File, caption?: string) => Promise<void>;
 }, never>, Pick<{
     messages: import("vue").Ref<{
         isLoading?: boolean | undefined;
@@ -397,5 +399,6 @@ export declare const useChatStore: import("pinia").StoreDefinition<"chat", Pick<
         lat: number;
         lng: number;
     }>;
-}, "initChat" | "resetChat" | "sendMessage" | "fetchHistory" | "loadHistory" | "deleteConversation" | "updateConversationTitle" | "initLocation">>;
+    sendImageMessage: (file: File, caption?: string) => Promise<void>;
+}, "initChat" | "resetChat" | "sendMessage" | "fetchHistory" | "loadHistory" | "deleteConversation" | "updateConversationTitle" | "initLocation" | "sendImageMessage">>;
 export {};

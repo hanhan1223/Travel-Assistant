@@ -181,7 +181,6 @@
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
 
-
         <!-- PostgreSQL - 如果使用 pgvector 需要此依赖 -->
         <dependency>
             <groupId>org.postgresql</groupId>

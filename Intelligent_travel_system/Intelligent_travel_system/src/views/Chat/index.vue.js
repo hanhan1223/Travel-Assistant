@@ -55,23 +55,31 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
     return to.concat(ar || Array.prototype.slice.call(from));
 };
 var _a, _b, _c;
-import { ref, onMounted, nextTick, watch, computed } from 'vue';
+import { ref, onMounted, nextTick, watch, computed, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useChatStore } from '../../stores/chatStore';
-import { useUserStore } from '../../stores/userStore'; // ✅ 引入 userStore
-import { showConfirmDialog } from 'vant';
+import { useUserStore } from '../../stores/userStore';
+import { showConfirmDialog, showToast } from 'vant';
 import LocationCard from './LocationCard.vue';
 import ProductCard from './ProductCard.vue';
 import MarkdownIt from 'markdown-it';
+import { XFVoiceClient } from '../../utils/xf-voice';
 var route = useRoute();
 var router = useRouter();
 var chatStore = useChatStore();
-var userStore = useUserStore(); // ✅ 初始化 userStore
+var userStore = useUserStore();
 var inputContent = ref('');
 var chatContainer = ref(null);
 var showHistory = ref(false);
 var currentConversationId = computed(function () { return chatStore.currentConversationId; });
-// 动态计算标题
+// 🌟 核心状态：判断用户是否正在向上翻阅历史记录
+var isUserScrolling = ref(false);
+var isRecording = ref(false);
+var showVoicePanel = ref(false);
+var fileInput = ref(null);
+var selectedImage = ref(null); // 存储选中的图片
+var imagePreviewUrl = ref(null); // 图片预览URL
+var voiceClient = null;
 var title = computed(function () {
     if (route.query.id) {
         var id_1 = Number(route.query.id);
@@ -84,7 +92,6 @@ var title = computed(function () {
     }
     return '非遗伴游';
 });
-// 初始化 Markdown 实例
 var md = new MarkdownIt({
     html: true,
     linkify: true,
@@ -97,28 +104,86 @@ var quickActions = [
     '🗺️ 游览路线',
     '🏺 历史渊源'
 ];
-// 天气状态判断
 var w = computed(function () { return (chatStore.envContext.weather || '').toLowerCase(); });
 var isRainy = computed(function () { return /雨|rain|shower|drizzle|storm/i.test(w.value); });
 var isSunny = computed(function () { return /晴|sunny|clear/i.test(w.value); });
 var isCloudy = computed(function () { return /云|阴|cloud|overcast/i.test(w.value); });
 var isSnowy = computed(function () { return /雪|snow|blizzard/i.test(w.value); });
 var isFoggy = computed(function () { return /雾|fog|mist|haze/i.test(w.value); });
-/**
- * 消息渲染函数
- */
-var renderMessage = function (content) {
+// 图片URL缓存，避免重复计算
+var imageUrlCache = new Map();
+// 从消息中提取图片URL（带缓存）
+var getImageUrl = function (msg) {
+    var msgId = msg.id || JSON.stringify(msg);
+    // 检查缓存
+    if (imageUrlCache.has(msgId)) {
+        return imageUrlCache.get(msgId);
+    }
+    var url = null;
+    // 1. 优先从 tempContent 获取（实时上传的图片）
+    if (msg.tempContent) {
+        url = msg.tempContent;
+    }
+    // 2. 从 toolCall 字段解析（历史记录）
+    else if (msg.toolCall) {
+        try {
+            var toolData = JSON.parse(msg.toolCall);
+            if (toolData.type === 'image' && toolData.url) {
+                url = toolData.url;
+            }
+        }
+        catch (e) {
+            // 解析失败，继续尝试其他方法
+        }
+    }
+    // 3. 从消息内容中提取图片URL（兼容旧格式）
+    else if (msg.content && typeof msg.content === 'string') {
+        // 匹配 "图片: https://..." 格式
+        var match = msg.content.match(/图片[：:]\s*(https?:\/\/[^\s]+)/);
+        if (match && match[1]) {
+            url = match[1];
+        }
+    }
+    // 缓存结果
+    imageUrlCache.set(msgId, url);
+    return url;
+};
+var renderMessage = function (content, role) {
     if (!content)
         return '';
-    // 将字符串 \n 转换为真正的换行符
+    // 先处理转义的换行符
     var processedContent = content.replace(/\\n/g, '\n');
-    // Markdown 渲染
+    // 移除图片URL行（如果存在），因为图片会单独渲染
+    processedContent = processedContent.replace(/图片[：:]\s*https?:\/\/[^\s]+\n?/g, '');
+    // 移除 [图片识别] 标签
+    processedContent = processedContent.replace(/\[图片识别\]\s*/g, '');
+    // 如果处理后内容为空，返回空字符串
+    if (!processedContent.trim()) {
+        return '';
+    }
+    // 渲染 Markdown
     var html = md.render(processedContent);
-    // 样式注入
-    html = html.replace(/<img src="(.*?)" alt="(.*?)">/g, '<img src="$1" alt="$2" class="chat-image rounded-xl my-2 max-w-full h-auto shadow-sm border border-gray-100" loading="lazy" />');
-    html = html.replace(/<img src="(.*?)" alt="(.*?)" \/>/g, '<img src="$1" alt="$2" class="chat-image rounded-xl my-2 max-w-full h-auto shadow-sm border border-gray-100" loading="lazy" />');
+    // 增强图片渲染：添加样式和点击预览功能
+    html = html.replace(/<img src="(.*?)" alt="(.*?)"(.*?)>/g, '<img src="$1" alt="$2" class="chat-image rounded-xl my-3 max-w-full h-auto shadow-md border border-gray-200 cursor-pointer hover:shadow-lg transition-all" loading="lazy" onclick="window.previewImage(\'$1\')" />');
+    // 处理链接：在新标签页打开
+    html = html.replace(/<a href="(.*?)">/g, '<a href="$1" target="_blank" rel="noopener noreferrer">');
     return html;
 };
+// 图片预览功能
+var previewImage = function (url) {
+    // 使用 Vant 的 ImagePreview
+    import('vant').then(function (_a) {
+        var showImagePreview = _a.showImagePreview;
+        showImagePreview({
+            images: [url],
+            closeable: true,
+        });
+    });
+};
+// 将预览函数挂载到 window 对象，供 HTML 中的 onclick 调用
+if (typeof window !== 'undefined') {
+    window.previewImage = previewImage;
+}
 var formatTime = function (time) {
     var date = new Date(time);
     var isToday = new Date().toDateString() === date.toDateString();
@@ -128,15 +193,48 @@ var formatTime = function (time) {
             ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : "".concat(date.getMonth() + 1, "/").concat(date.getDate(), " ").concat(date.getHours(), ":").concat(date.getMinutes().toString().padStart(2, '0'));
 };
-var scrollToBottom = function () {
-    nextTick(function () {
-        if (chatContainer.value) {
-            chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
-        }
-    });
+// 🌟 滚动处理函数：判断用户是否偏离底部
+var handleScroll = function () {
+    if (!chatContainer.value)
+        return;
+    var _a = chatContainer.value, scrollTop = _a.scrollTop, scrollHeight = _a.scrollHeight, clientHeight = _a.clientHeight;
+    // 如果距离底部超过 100px，则认为用户正在浏览历史
+    isUserScrolling.value = scrollHeight - scrollTop - clientHeight > 100;
 };
-watch(function () { return chatStore.messages.length; }, scrollToBottom);
-watch(function () { return chatStore.messages[chatStore.messages.length - 1]; }, function () { return scrollToBottom(); }, { deep: true });
+// 防抖定时器
+var scrollTimer = null;
+// 🌟 智能滚动函数（带防抖）
+var scrollToBottom = function (force) {
+    if (force === void 0) { force = false; }
+    // 清除之前的定时器
+    if (scrollTimer) {
+        clearTimeout(scrollTimer);
+    }
+    // 使用防抖，避免频繁滚动导致抖动
+    scrollTimer = setTimeout(function () {
+        nextTick(function () {
+            if (chatContainer.value) {
+                // 只有在强制滚动，或者用户当前就在底部附近时，才执行滚动
+                if (force || !isUserScrolling.value) {
+                    chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+                    if (force)
+                        isUserScrolling.value = false; // 强制滚动后，重置状态
+                }
+            }
+        });
+    }, force ? 0 : 100); // 强制滚动立即执行，否则延迟100ms
+};
+// 🌟 监听：新消息增加 -> 强制滚动
+watch(function () { return chatStore.messages.length; }, function () {
+    scrollToBottom(true);
+});
+// 🌟 监听：消息内容变化（打字机效果）-> 智能滚动（仅在流式传输时）
+watch(function () { return chatStore.messages[chatStore.messages.length - 1]; }, function () {
+    // 只有在流式传输时才自动滚动，否则用户可能在查看历史消息
+    if (chatStore.isStreaming) {
+        scrollToBottom(false);
+    }
+}, { deep: true });
 watch(showHistory, function (newVal) {
     if (newVal)
         chatStore.fetchHistory();
@@ -159,13 +257,22 @@ var initOrLoad = function () { return __awaiter(void 0, void 0, void 0, function
                 _a.sent();
                 _a.label = 4;
             case 4:
-                scrollToBottom();
+                scrollToBottom(true); // 初始化强制到底部
                 return [2 /*return*/];
         }
     });
 }); };
 watch(function () { return route.query.id; }, function () { initOrLoad(); });
 onMounted(function () { initOrLoad(); });
+onUnmounted(function () {
+    if (voiceClient)
+        voiceClient.stop();
+    if (scrollTimer)
+        clearTimeout(scrollTimer);
+    if (imagePreviewUrl.value)
+        URL.revokeObjectURL(imagePreviewUrl.value);
+    imageUrlCache.clear(); // 清理缓存
+});
 var handleBack = function () {
     if (route.query.id)
         router.back();
@@ -178,12 +285,83 @@ var handleQuickAction = function (text) {
     chatStore.sendMessage(text);
 };
 var handleSend = function () {
+    // 如果有选中的图片，发送图片消息
+    if (selectedImage.value) {
+        chatStore.sendImageMessage(selectedImage.value, inputContent.value);
+        // 清理图片相关状态
+        selectedImage.value = null;
+        if (imagePreviewUrl.value) {
+            URL.revokeObjectURL(imagePreviewUrl.value);
+            imagePreviewUrl.value = null;
+        }
+        inputContent.value = '';
+        return;
+    }
+    // 否则发送普通文本消息
     if (!inputContent.value.trim() || chatStore.isStreaming)
         return;
     chatStore.sendMessage(inputContent.value);
     inputContent.value = '';
 };
-// 手势相关
+var triggerImageUpload = function () {
+    var _a;
+    (_a = fileInput.value) === null || _a === void 0 ? void 0 : _a.click();
+};
+var cancelImageSelection = function () {
+    selectedImage.value = null;
+    if (imagePreviewUrl.value) {
+        URL.revokeObjectURL(imagePreviewUrl.value);
+        imagePreviewUrl.value = null;
+    }
+    showToast('已取消图片选择');
+};
+var handleFileChange = function (event) {
+    var target = event.target;
+    if (target.files && target.files[0]) {
+        var file = target.files[0];
+        if (file.size > 10 * 1024 * 1024) {
+            showToast('图片不能超过 10MB');
+            return;
+        }
+        // 保存选中的图片
+        selectedImage.value = file;
+        // 创建预览URL
+        imagePreviewUrl.value = URL.createObjectURL(file);
+        // 提示用户可以输入问题
+        showToast('图片已选择，可以输入问题或直接发送');
+    }
+    if (target.value)
+        target.value = '';
+};
+var toggleVoicePanel = function () {
+    showVoicePanel.value = !showVoicePanel.value;
+};
+var startRecording = function () { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                isRecording.value = true;
+                if (!voiceClient) {
+                    voiceClient = new XFVoiceClient(function (text, isFinal) {
+                        inputContent.value += text;
+                    }, function (err) {
+                        showToast(err);
+                        isRecording.value = false;
+                    });
+                }
+                return [4 /*yield*/, voiceClient.start()];
+            case 1:
+                _a.sent();
+                return [2 /*return*/];
+        }
+    });
+}); };
+var stopRecording = function () {
+    if (voiceClient) {
+        voiceClient.stop();
+    }
+    isRecording.value = false;
+};
 var touchStart = ref({ x: 0, y: 0 });
 var minSwipeDistance = 50;
 var handleTouchStart = function (e) {
@@ -195,7 +373,7 @@ var handleTouchEnd = function (e) {
     var deltaY = touchEnd.y - touchStart.value.y;
     if (Math.abs(deltaX) > minSwipeDistance && Math.abs(deltaY) < 50) {
         if (deltaX < 0)
-            showHistory.value = true; // 左滑显示历史
+            showHistory.value = true;
     }
 };
 var switchConversation = function (id) { return __awaiter(void 0, void 0, void 0, function () {
@@ -246,6 +424,32 @@ var __VLS_directives;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['assistant-message']} */ ;
+/** @type {__VLS_StyleScopedClasses['user-message']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['user-message']} */ ;
+/** @type {__VLS_StyleScopedClasses['message-content']} */ ;
+/** @type {__VLS_StyleScopedClasses['assistant-message']} */ ;
+/** @type {__VLS_StyleScopedClasses['user-message']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
 /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
@@ -422,15 +626,14 @@ if (!__VLS_ctx.route.query.id) {
 [];
 var __VLS_3;
 var __VLS_4;
-__VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "flex-1 overflow-y-auto p-4 space-y-6 relative z-10" }, { ref: "chatContainer" }));
+__VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign(__assign({ onScroll: (__VLS_ctx.handleScroll) }, { class: "flex-1 overflow-y-auto p-4 space-y-6 relative z-10" }), { ref: "chatContainer" }));
 /** @type {__VLS_StyleScopedClasses['flex-1']} */ ;
 /** @type {__VLS_StyleScopedClasses['overflow-y-auto']} */ ;
 /** @type {__VLS_StyleScopedClasses['p-4']} */ ;
 /** @type {__VLS_StyleScopedClasses['space-y-6']} */ ;
 /** @type {__VLS_StyleScopedClasses['relative']} */ ;
 /** @type {__VLS_StyleScopedClasses['z-10']} */ ;
-for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length; _i++) {
-    var msg = _d[_i][0];
+var _loop_1 = function (msg) {
     __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ key: (msg.id) }, { class: "flex flex-col" }));
     /** @type {__VLS_StyleScopedClasses['flex']} */ ;
     /** @type {__VLS_StyleScopedClasses['flex-col']} */ ;
@@ -479,6 +682,28 @@ for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length
     /** @type {__VLS_StyleScopedClasses['shadow-sm']} */ ;
     /** @type {__VLS_StyleScopedClasses['break-words']} */ ;
     /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
+    if (__VLS_ctx.getImageUrl(msg)) {
+        __VLS_asFunctionalElement1(__VLS_intrinsics.img)(__assign(__assign(__assign({ onClick: function () {
+                var _a = [];
+                for (var _i = 0; _i < arguments.length; _i++) {
+                    _a[_i] = arguments[_i];
+                }
+                var $event = _a[0];
+                if (!(__VLS_ctx.getImageUrl(msg)))
+                    return;
+                __VLS_ctx.previewImage(__VLS_ctx.getImageUrl(msg));
+                // @ts-ignore
+                [handleScroll, chatStore, formatTime, getImageUrl, getImageUrl, previewImage,];
+            } }, { src: (__VLS_ctx.getImageUrl(msg)) }), { class: "rounded-lg mb-2 max-w-full border border-white/20 cursor-pointer hover:opacity-90 transition-opacity" }), { alt: "发送的图片" }));
+        /** @type {__VLS_StyleScopedClasses['rounded-lg']} */ ;
+        /** @type {__VLS_StyleScopedClasses['mb-2']} */ ;
+        /** @type {__VLS_StyleScopedClasses['max-w-full']} */ ;
+        /** @type {__VLS_StyleScopedClasses['border']} */ ;
+        /** @type {__VLS_StyleScopedClasses['border-white/20']} */ ;
+        /** @type {__VLS_StyleScopedClasses['cursor-pointer']} */ ;
+        /** @type {__VLS_StyleScopedClasses['hover:opacity-90']} */ ;
+        /** @type {__VLS_StyleScopedClasses['transition-opacity']} */ ;
+    }
     if (msg.isThinking && !msg.content) {
         __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "flex items-center space-x-1 py-1 h-6" }));
         /** @type {__VLS_StyleScopedClasses['flex']} */ ;
@@ -499,15 +724,18 @@ for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length
         /** @type {__VLS_StyleScopedClasses['text-xs']} */ ;
         /** @type {__VLS_StyleScopedClasses['text-gray-400']} */ ;
     }
-    else {
-        __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "message-content markdown-body" }));
-        __VLS_asFunctionalDirective(__VLS_directives.vHtml, {})(null, __assign(__assign({}, __VLS_directiveBindingRestFields), { value: (__VLS_ctx.renderMessage(msg.content)) }), null, null);
+    else if (msg.content) {
+        __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: ([
+                'message-content markdown-body',
+                msg.role === 'user' ? 'user-message' : 'assistant-message'
+            ]) }));
+        __VLS_asFunctionalDirective(__VLS_directives.vHtml, {})(null, __assign(__assign({}, __VLS_directiveBindingRestFields), { value: (__VLS_ctx.renderMessage(msg.content, msg.role)) }), null, null);
         /** @type {__VLS_StyleScopedClasses['message-content']} */ ;
         /** @type {__VLS_StyleScopedClasses['markdown-body']} */ ;
     }
     if (msg.locations && msg.locations.length > 0) {
-        for (var _e = 0, _f = __VLS_vFor((msg.locations)); _e < _f.length; _e++) {
-            var _g = _f[_e], loc = _g[0], idx = _g[1];
+        for (var _j = 0, _k = __VLS_vFor((msg.locations)); _j < _k.length; _j++) {
+            var _l = _k[_j], loc = _l[0], idx = _l[1];
             var __VLS_17 = LocationCard;
             // @ts-ignore
             var __VLS_18 = __VLS_asFunctionalComponent1(__VLS_17, new __VLS_17(__assign({ key: (idx), data: (loc) }, { class: "mt-3 shadow-md" })));
@@ -515,7 +743,7 @@ for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length
             /** @type {__VLS_StyleScopedClasses['mt-3']} */ ;
             /** @type {__VLS_StyleScopedClasses['shadow-md']} */ ;
             // @ts-ignore
-            [chatStore, formatTime, renderMessage,];
+            [getImageUrl, renderMessage,];
         }
     }
     else if (msg.type === 'location' && msg.location) {
@@ -527,8 +755,8 @@ for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length
         /** @type {__VLS_StyleScopedClasses['shadow-md']} */ ;
     }
     if (msg.type === 'product' && msg.products) {
-        for (var _h = 0, _j = __VLS_vFor((msg.products)); _h < _j.length; _h++) {
-            var _k = _j[_h], prod = _k[0], idx = _k[1];
+        for (var _m = 0, _o = __VLS_vFor((msg.products)); _m < _o.length; _m++) {
+            var _p = _o[_m], prod = _p[0], idx = _p[1];
             var __VLS_27 = ProductCard;
             // @ts-ignore
             var __VLS_28 = __VLS_asFunctionalComponent1(__VLS_27, new __VLS_27(__assign({ key: (idx), data: (prod) }, { class: "mt-3 shadow-md" })));
@@ -567,6 +795,10 @@ for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length
     }
     // @ts-ignore
     [userStore, userStore,];
+};
+for (var _i = 0, _d = __VLS_vFor((__VLS_ctx.chatStore.messages)); _i < _d.length; _i++) {
+    var msg = _d[_i][0];
+    _loop_1(msg);
 }
 var __VLS_32;
 /** @ts-ignore @type {typeof __VLS_components.vanPopup | typeof __VLS_components.VanPopup | typeof __VLS_components.vanPopup | typeof __VLS_components.VanPopup} */
@@ -629,7 +861,7 @@ if (!((_c = __VLS_ctx.chatStore.historyList) === null || _c === void 0 ? void 0 
             description: "暂无历史记录",
         }], __VLS_functionalComponentArgsRest(__VLS_46), false));
 }
-var _loop_1 = function (item) {
+var _loop_2 = function (item) {
     __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign(__assign({ onClick: function () {
             var _a = [];
             for (var _i = 0; _i < arguments.length; _i++) {
@@ -699,9 +931,9 @@ var _loop_1 = function (item) {
     // @ts-ignore
     [];
 };
-for (var _l = 0, _m = __VLS_vFor((__VLS_ctx.chatStore.historyList)); _l < _m.length; _l++) {
-    var item = _m[_l][0];
-    _loop_1(item);
+for (var _e = 0, _f = __VLS_vFor((__VLS_ctx.chatStore.historyList)); _e < _f.length; _e++) {
+    var item = _f[_e][0];
+    _loop_2(item);
 }
 __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "p-4 border-t bg-white" }));
 /** @type {__VLS_StyleScopedClasses['p-4']} */ ;
@@ -750,49 +982,99 @@ __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign(
 /** @type {__VLS_StyleScopedClasses['shadow-[0_-4px_20px_rgba(0,0,0,0.02)]']} */ ;
 /** @type {__VLS_StyleScopedClasses['flex']} */ ;
 /** @type {__VLS_StyleScopedClasses['flex-col']} */ ;
-__VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "flex gap-2 px-4 pt-3 pb-1 overflow-x-auto no-scrollbar w-full" }));
-/** @type {__VLS_StyleScopedClasses['flex']} */ ;
-/** @type {__VLS_StyleScopedClasses['gap-2']} */ ;
-/** @type {__VLS_StyleScopedClasses['px-4']} */ ;
-/** @type {__VLS_StyleScopedClasses['pt-3']} */ ;
-/** @type {__VLS_StyleScopedClasses['pb-1']} */ ;
-/** @type {__VLS_StyleScopedClasses['overflow-x-auto']} */ ;
-/** @type {__VLS_StyleScopedClasses['no-scrollbar']} */ ;
-/** @type {__VLS_StyleScopedClasses['w-full']} */ ;
-var _loop_2 = function (item) {
-    __VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign({ onClick: function () {
-            var _a = [];
-            for (var _i = 0; _i < arguments.length; _i++) {
-                _a[_i] = arguments[_i];
-            }
-            var $event = _a[0];
-            __VLS_ctx.handleQuickAction(item);
-            // @ts-ignore
-            [quickActions, handleQuickAction,];
-        } }, { key: (item), disabled: (__VLS_ctx.chatStore.isStreaming) }), { class: "flex-shrink-0 px-3 py-1.5 bg-indigo-50 text-indigo-600 text-xs font-medium rounded-full border border-indigo-100 active:bg-indigo-100 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap" }));
-    /** @type {__VLS_StyleScopedClasses['flex-shrink-0']} */ ;
-    /** @type {__VLS_StyleScopedClasses['px-3']} */ ;
-    /** @type {__VLS_StyleScopedClasses['py-1.5']} */ ;
-    /** @type {__VLS_StyleScopedClasses['bg-indigo-50']} */ ;
-    /** @type {__VLS_StyleScopedClasses['text-indigo-600']} */ ;
-    /** @type {__VLS_StyleScopedClasses['text-xs']} */ ;
-    /** @type {__VLS_StyleScopedClasses['font-medium']} */ ;
+if (__VLS_ctx.imagePreviewUrl) {
+    __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "px-4 pt-3 pb-2 border-b border-gray-100" }));
+    /** @type {__VLS_StyleScopedClasses['px-4']} */ ;
+    /** @type {__VLS_StyleScopedClasses['pt-3']} */ ;
+    /** @type {__VLS_StyleScopedClasses['pb-2']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-b']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-gray-100']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "relative inline-block" }));
+    /** @type {__VLS_StyleScopedClasses['relative']} */ ;
+    /** @type {__VLS_StyleScopedClasses['inline-block']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.img)(__assign(__assign({ src: (__VLS_ctx.imagePreviewUrl) }, { class: "h-20 w-20 object-cover rounded-lg border-2 border-indigo-200" }), { alt: "预览" }));
+    /** @type {__VLS_StyleScopedClasses['h-20']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-20']} */ ;
+    /** @type {__VLS_StyleScopedClasses['object-cover']} */ ;
+    /** @type {__VLS_StyleScopedClasses['rounded-lg']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-2']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-indigo-200']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign({ onClick: (__VLS_ctx.cancelImageSelection) }, { class: "absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors shadow-md" }));
+    /** @type {__VLS_StyleScopedClasses['absolute']} */ ;
+    /** @type {__VLS_StyleScopedClasses['-top-2']} */ ;
+    /** @type {__VLS_StyleScopedClasses['-right-2']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-6']} */ ;
+    /** @type {__VLS_StyleScopedClasses['h-6']} */ ;
+    /** @type {__VLS_StyleScopedClasses['bg-red-500']} */ ;
+    /** @type {__VLS_StyleScopedClasses['text-white']} */ ;
     /** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
-    /** @type {__VLS_StyleScopedClasses['border']} */ ;
-    /** @type {__VLS_StyleScopedClasses['border-indigo-100']} */ ;
-    /** @type {__VLS_StyleScopedClasses['active:bg-indigo-100']} */ ;
-    /** @type {__VLS_StyleScopedClasses['active:scale-95']} */ ;
-    /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
-    /** @type {__VLS_StyleScopedClasses['disabled:opacity-50']} */ ;
-    /** @type {__VLS_StyleScopedClasses['disabled:cursor-not-allowed']} */ ;
-    /** @type {__VLS_StyleScopedClasses['whitespace-nowrap']} */ ;
-    (item);
-    // @ts-ignore
-    [chatStore,];
-};
-for (var _o = 0, _p = __VLS_vFor((__VLS_ctx.quickActions)); _o < _p.length; _o++) {
-    var item = _p[_o][0];
-    _loop_2(item);
+    /** @type {__VLS_StyleScopedClasses['flex']} */ ;
+    /** @type {__VLS_StyleScopedClasses['items-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['justify-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['hover:bg-red-600']} */ ;
+    /** @type {__VLS_StyleScopedClasses['transition-colors']} */ ;
+    /** @type {__VLS_StyleScopedClasses['shadow-md']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(__assign({ xmlns: "http://www.w3.org/2000/svg" }, { class: "h-4 w-4" }), { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" }));
+    /** @type {__VLS_StyleScopedClasses['h-4']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-4']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.path)({
+        'stroke-linecap': "round",
+        'stroke-linejoin': "round",
+        'stroke-width': "2",
+        d: "M6 18L18 6M6 6l12 12",
+    });
+    __VLS_asFunctionalElement1(__VLS_intrinsics.p, __VLS_intrinsics.p)(__assign({ class: "text-xs text-gray-500 mt-1" }));
+    /** @type {__VLS_StyleScopedClasses['text-xs']} */ ;
+    /** @type {__VLS_StyleScopedClasses['text-gray-500']} */ ;
+    /** @type {__VLS_StyleScopedClasses['mt-1']} */ ;
+}
+if (!__VLS_ctx.showVoicePanel) {
+    __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "flex gap-2 px-4 pt-3 pb-1 overflow-x-auto no-scrollbar w-full" }));
+    /** @type {__VLS_StyleScopedClasses['flex']} */ ;
+    /** @type {__VLS_StyleScopedClasses['gap-2']} */ ;
+    /** @type {__VLS_StyleScopedClasses['px-4']} */ ;
+    /** @type {__VLS_StyleScopedClasses['pt-3']} */ ;
+    /** @type {__VLS_StyleScopedClasses['pb-1']} */ ;
+    /** @type {__VLS_StyleScopedClasses['overflow-x-auto']} */ ;
+    /** @type {__VLS_StyleScopedClasses['no-scrollbar']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-full']} */ ;
+    var _loop_3 = function (item) {
+        __VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign({ onClick: function () {
+                var _a = [];
+                for (var _i = 0; _i < arguments.length; _i++) {
+                    _a[_i] = arguments[_i];
+                }
+                var $event = _a[0];
+                if (!(!__VLS_ctx.showVoicePanel))
+                    return;
+                __VLS_ctx.handleQuickAction(item);
+                // @ts-ignore
+                [imagePreviewUrl, imagePreviewUrl, cancelImageSelection, showVoicePanel, quickActions, handleQuickAction,];
+            } }, { key: (item), disabled: (__VLS_ctx.chatStore.isStreaming) }), { class: "flex-shrink-0 px-3 py-1.5 bg-indigo-50 text-indigo-600 text-xs font-medium rounded-full border border-indigo-100 active:bg-indigo-100 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap" }));
+        /** @type {__VLS_StyleScopedClasses['flex-shrink-0']} */ ;
+        /** @type {__VLS_StyleScopedClasses['px-3']} */ ;
+        /** @type {__VLS_StyleScopedClasses['py-1.5']} */ ;
+        /** @type {__VLS_StyleScopedClasses['bg-indigo-50']} */ ;
+        /** @type {__VLS_StyleScopedClasses['text-indigo-600']} */ ;
+        /** @type {__VLS_StyleScopedClasses['text-xs']} */ ;
+        /** @type {__VLS_StyleScopedClasses['font-medium']} */ ;
+        /** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+        /** @type {__VLS_StyleScopedClasses['border']} */ ;
+        /** @type {__VLS_StyleScopedClasses['border-indigo-100']} */ ;
+        /** @type {__VLS_StyleScopedClasses['active:bg-indigo-100']} */ ;
+        /** @type {__VLS_StyleScopedClasses['active:scale-95']} */ ;
+        /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
+        /** @type {__VLS_StyleScopedClasses['disabled:opacity-50']} */ ;
+        /** @type {__VLS_StyleScopedClasses['disabled:cursor-not-allowed']} */ ;
+        /** @type {__VLS_StyleScopedClasses['whitespace-nowrap']} */ ;
+        (item);
+        // @ts-ignore
+        [chatStore,];
+    };
+    for (var _g = 0, _h = __VLS_vFor((__VLS_ctx.quickActions)); _g < _h.length; _g++) {
+        var item = _h[_g][0];
+        _loop_3(item);
+    }
 }
 __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "flex items-center gap-3 px-4 py-3" }));
 /** @type {__VLS_StyleScopedClasses['flex']} */ ;
@@ -800,7 +1082,67 @@ __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign(
 /** @type {__VLS_StyleScopedClasses['gap-3']} */ ;
 /** @type {__VLS_StyleScopedClasses['px-4']} */ ;
 /** @type {__VLS_StyleScopedClasses['py-3']} */ ;
-__VLS_asFunctionalElement1(__VLS_intrinsics.input)(__assign(__assign(__assign({ onKeyup: (__VLS_ctx.handleSend) }, { value: (__VLS_ctx.inputContent), type: "text" }), { class: "flex-1 bg-gray-100/80 rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white transition-all placeholder-gray-400" }), { placeholder: "问问附近的非遗体验...", disabled: (__VLS_ctx.chatStore.isStreaming) }));
+__VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign({ onClick: function () {
+        var _a = [];
+        for (var _i = 0; _i < arguments.length; _i++) {
+            _a[_i] = arguments[_i];
+        }
+        var $event = _a[0];
+        __VLS_ctx.router.push('/game');
+        // @ts-ignore
+        [router,];
+    } }, { class: "p-2 rounded-full text-yellow-500 bg-yellow-50 hover:bg-yellow-100 hover:text-yellow-600 border border-yellow-200 shadow-sm transition-all active:scale-95 flex-shrink-0" }), { title: "知识闯关" }));
+/** @type {__VLS_StyleScopedClasses['p-2']} */ ;
+/** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-yellow-500']} */ ;
+/** @type {__VLS_StyleScopedClasses['bg-yellow-50']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:bg-yellow-100']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:text-yellow-600']} */ ;
+/** @type {__VLS_StyleScopedClasses['border']} */ ;
+/** @type {__VLS_StyleScopedClasses['border-yellow-200']} */ ;
+/** @type {__VLS_StyleScopedClasses['shadow-sm']} */ ;
+/** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
+/** @type {__VLS_StyleScopedClasses['active:scale-95']} */ ;
+/** @type {__VLS_StyleScopedClasses['flex-shrink-0']} */ ;
+__VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(__assign({ xmlns: "http://www.w3.org/2000/svg" }, { class: "h-6 w-6" }), { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" }));
+/** @type {__VLS_StyleScopedClasses['h-6']} */ ;
+/** @type {__VLS_StyleScopedClasses['w-6']} */ ;
+__VLS_asFunctionalElement1(__VLS_intrinsics.path)({
+    'stroke-linecap': "round",
+    'stroke-linejoin': "round",
+    'stroke-width': "2",
+    d: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
+});
+__VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign({ onClick: (__VLS_ctx.toggleVoicePanel) }, { class: "p-2 rounded-full text-gray-500 hover:text-blue-600 hover:bg-gray-100 transition-colors" }));
+/** @type {__VLS_StyleScopedClasses['p-2']} */ ;
+/** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-gray-500']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:text-blue-600']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:bg-gray-100']} */ ;
+/** @type {__VLS_StyleScopedClasses['transition-colors']} */ ;
+if (__VLS_ctx.showVoicePanel) {
+    __VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(__assign({ xmlns: "http://www.w3.org/2000/svg" }, { class: "h-6 w-6" }), { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" }));
+    /** @type {__VLS_StyleScopedClasses['h-6']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-6']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.path)({
+        'stroke-linecap': "round",
+        'stroke-linejoin': "round",
+        'stroke-width': "2",
+        d: "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z",
+    });
+}
+else {
+    __VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(__assign({ xmlns: "http://www.w3.org/2000/svg" }, { class: "h-6 w-6" }), { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" }));
+    /** @type {__VLS_StyleScopedClasses['h-6']} */ ;
+    /** @type {__VLS_StyleScopedClasses['w-6']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.path)({
+        'stroke-linecap': "round",
+        'stroke-linejoin': "round",
+        'stroke-width': "2",
+        d: "M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z",
+    });
+}
+__VLS_asFunctionalElement1(__VLS_intrinsics.input)(__assign(__assign(__assign({ onKeyup: (__VLS_ctx.handleSend) }, { value: (__VLS_ctx.inputContent), type: "text" }), { class: "flex-1 bg-gray-100/80 rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white transition-all placeholder-gray-400" }), { placeholder: (__VLS_ctx.showVoicePanel ? '按住下方按钮说话...' : '问问附近的非遗体验...'), disabled: (__VLS_ctx.chatStore.isStreaming || __VLS_ctx.showVoicePanel) }));
 /** @type {__VLS_StyleScopedClasses['flex-1']} */ ;
 /** @type {__VLS_StyleScopedClasses['bg-gray-100/80']} */ ;
 /** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
@@ -813,9 +1155,27 @@ __VLS_asFunctionalElement1(__VLS_intrinsics.input)(__assign(__assign(__assign({ 
 /** @type {__VLS_StyleScopedClasses['focus:bg-white']} */ ;
 /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
 /** @type {__VLS_StyleScopedClasses['placeholder-gray-400']} */ ;
-__VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign({ onClick: (__VLS_ctx.handleSend) }, { disabled: (!__VLS_ctx.inputContent.trim() || __VLS_ctx.chatStore.isStreaming) }), { class: ([
+__VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign({ onClick: (__VLS_ctx.triggerImageUpload) }, { class: "p-2 rounded-full text-gray-500 hover:text-blue-600 hover:bg-gray-100 transition-colors" }));
+/** @type {__VLS_StyleScopedClasses['p-2']} */ ;
+/** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-gray-500']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:text-blue-600']} */ ;
+/** @type {__VLS_StyleScopedClasses['hover:bg-gray-100']} */ ;
+/** @type {__VLS_StyleScopedClasses['transition-colors']} */ ;
+__VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(__assign({ xmlns: "http://www.w3.org/2000/svg" }, { class: "h-6 w-6" }), { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" }));
+/** @type {__VLS_StyleScopedClasses['h-6']} */ ;
+/** @type {__VLS_StyleScopedClasses['w-6']} */ ;
+__VLS_asFunctionalElement1(__VLS_intrinsics.path)({
+    'stroke-linecap': "round",
+    'stroke-linejoin': "round",
+    'stroke-width': "2",
+    d: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z",
+});
+__VLS_asFunctionalElement1(__VLS_intrinsics.input)(__assign(__assign({ onChange: (__VLS_ctx.handleFileChange) }, { type: "file", ref: "fileInput", accept: "image/*" }), { class: "hidden" }));
+/** @type {__VLS_StyleScopedClasses['hidden']} */ ;
+__VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign({ onClick: (__VLS_ctx.handleSend) }, { disabled: ((!__VLS_ctx.inputContent.trim() && !__VLS_ctx.selectedImage) || __VLS_ctx.chatStore.isStreaming) }), { class: ([
         'rounded-full p-3 transition-all duration-300 flex items-center justify-center',
-        __VLS_ctx.inputContent.trim() && !__VLS_ctx.chatStore.isStreaming
+        (__VLS_ctx.inputContent.trim() || __VLS_ctx.selectedImage) && !__VLS_ctx.chatStore.isStreaming
             ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-100 hover:bg-indigo-700'
             : 'bg-gray-100 text-gray-300 scale-95'
     ]) }));
@@ -834,7 +1194,54 @@ __VLS_asFunctionalElement1(__VLS_intrinsics.svg, __VLS_intrinsics.svg)(__assign(
 __VLS_asFunctionalElement1(__VLS_intrinsics.path)({
     d: "M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z",
 });
+if (__VLS_ctx.showVoicePanel) {
+    __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "bg-gray-50 border-t border-gray-100 p-8 flex justify-center items-center h-48 transition-all animate-slide-up" }));
+    /** @type {__VLS_StyleScopedClasses['bg-gray-50']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-t']} */ ;
+    /** @type {__VLS_StyleScopedClasses['border-gray-100']} */ ;
+    /** @type {__VLS_StyleScopedClasses['p-8']} */ ;
+    /** @type {__VLS_StyleScopedClasses['flex']} */ ;
+    /** @type {__VLS_StyleScopedClasses['justify-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['items-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['h-48']} */ ;
+    /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
+    /** @type {__VLS_StyleScopedClasses['animate-slide-up']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "relative" }));
+    /** @type {__VLS_StyleScopedClasses['relative']} */ ;
+    __VLS_asFunctionalElement1(__VLS_intrinsics.button, __VLS_intrinsics.button)(__assign(__assign(__assign(__assign({ onMousedown: (__VLS_ctx.startRecording) }, { onMouseup: (__VLS_ctx.stopRecording) }), { onTouchstart: (__VLS_ctx.startRecording) }), { onTouchend: (__VLS_ctx.stopRecording) }), { class: ([
+            'w-24 h-24 rounded-full flex items-center justify-center text-4xl shadow-xl select-none transition-all duration-200',
+            __VLS_ctx.isRecording ? 'bg-indigo-500 text-white scale-110 ring-8 ring-indigo-200' : 'bg-white text-indigo-500 hover:shadow-2xl'
+        ]) }));
+    /** @type {__VLS_StyleScopedClasses['w-24']} */ ;
+    /** @type {__VLS_StyleScopedClasses['h-24']} */ ;
+    /** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+    /** @type {__VLS_StyleScopedClasses['flex']} */ ;
+    /** @type {__VLS_StyleScopedClasses['items-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['justify-center']} */ ;
+    /** @type {__VLS_StyleScopedClasses['text-4xl']} */ ;
+    /** @type {__VLS_StyleScopedClasses['shadow-xl']} */ ;
+    /** @type {__VLS_StyleScopedClasses['select-none']} */ ;
+    /** @type {__VLS_StyleScopedClasses['transition-all']} */ ;
+    /** @type {__VLS_StyleScopedClasses['duration-200']} */ ;
+    if (__VLS_ctx.isRecording) {
+        __VLS_asFunctionalElement1(__VLS_intrinsics.div, __VLS_intrinsics.div)(__assign({ class: "absolute inset-0 rounded-full animate-ping bg-indigo-400 opacity-20 z-0" }));
+        /** @type {__VLS_StyleScopedClasses['absolute']} */ ;
+        /** @type {__VLS_StyleScopedClasses['inset-0']} */ ;
+        /** @type {__VLS_StyleScopedClasses['rounded-full']} */ ;
+        /** @type {__VLS_StyleScopedClasses['animate-ping']} */ ;
+        /** @type {__VLS_StyleScopedClasses['bg-indigo-400']} */ ;
+        /** @type {__VLS_StyleScopedClasses['opacity-20']} */ ;
+        /** @type {__VLS_StyleScopedClasses['z-0']} */ ;
+    }
+    __VLS_asFunctionalElement1(__VLS_intrinsics.p, __VLS_intrinsics.p)(__assign({ class: "absolute bottom-6 text-gray-400 text-sm font-medium" }));
+    /** @type {__VLS_StyleScopedClasses['absolute']} */ ;
+    /** @type {__VLS_StyleScopedClasses['bottom-6']} */ ;
+    /** @type {__VLS_StyleScopedClasses['text-gray-400']} */ ;
+    /** @type {__VLS_StyleScopedClasses['text-sm']} */ ;
+    /** @type {__VLS_StyleScopedClasses['font-medium']} */ ;
+    (__VLS_ctx.isRecording ? '松开结束' : '按住说话');
+}
 // @ts-ignore
-[chatStore, chatStore, chatStore, handleSend, handleSend, inputContent, inputContent, inputContent,];
+[chatStore, chatStore, chatStore, showVoicePanel, showVoicePanel, showVoicePanel, showVoicePanel, toggleVoicePanel, handleSend, handleSend, inputContent, inputContent, inputContent, triggerImageUpload, handleFileChange, selectedImage, selectedImage, startRecording, startRecording, stopRecording, stopRecording, isRecording, isRecording, isRecording,];
 var __VLS_export = (await import('vue')).defineComponent({});
 export default {};

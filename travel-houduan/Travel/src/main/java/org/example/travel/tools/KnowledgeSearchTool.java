@@ -25,8 +25,8 @@ public class KnowledgeSearchTool {
 
     @Tool(description = "从知识库中检索与查询内容相关的非遗文化知识，用于回答用户关于非遗历史、工艺、传承等方面的问题")
     public String searchKnowledge(
-            @ToolParam(description = "查询内容，如：苏绣的历史、昆曲的特点、制瓷工艺等") String query,
-            int i) {
+            @ToolParam(description = "查询内容，如：苏绣的历史、昆曲的特点、制瓷工艺等") String query
+    ) {
         String result = knowledgeService.searchRelevantContent(query, 3);
         if (result.isEmpty()) {
             return "知识库中暂无相关内容";

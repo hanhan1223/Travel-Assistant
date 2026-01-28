@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.qcloud.cos.model.COSObject;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.example.travel.constants.CacheConstants;
 import org.example.travel.exception.BusinessException;
 import org.example.travel.exception.ErrorCode;
 import org.example.travel.manager.CosManager;
@@ -16,6 +17,7 @@ import org.example.travel.model.dto.knowledge.KnowledgeQueryRequest;
 import org.example.travel.model.dto.knowledge.KnowledgeUploadRequest;
 import org.example.travel.model.entity.KnowledgeDocument;
 import org.example.travel.rag.CustomPgVectorStore;
+import org.example.travel.service.CacheService;
 import org.example.travel.service.KnowledgeService;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
@@ -46,6 +48,9 @@ public class KnowledgeServiceImpl extends ServiceImpl<KnowledgeDocumentMapper, K
 
     @Resource(name = "customVectorStore")
     private CustomPgVectorStore vectorStore;
+    
+    @Resource
+    private CacheService cacheService;
 
     // 支持的文件类型
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(
@@ -364,24 +369,39 @@ public class KnowledgeServiceImpl extends ServiceImpl<KnowledgeDocumentMapper, K
             return "";
         }
 
-        try {
-            SearchRequest searchRequest = SearchRequest.builder()
-                    .query(query)
-                    .topK(topK)
-                    .build();
-            
-            List<Document> results = vectorStore.similaritySearch(searchRequest);
-            
-            if (results.isEmpty()) {
-                return "";
-            }
+        // 使用缓存
+        String cacheKey = CacheConstants.buildKey(
+            CacheConstants.KNOWLEDGE_SEARCH_PREFIX,
+            query,
+            topK
+        );
+        
+        return cacheService.get(
+            cacheKey,
+            () -> {
+                try {
+                    SearchRequest searchRequest = SearchRequest.builder()
+                            .query(query)
+                            .topK(topK)
+                            .build();
+                    
+                    List<Document> results = vectorStore.similaritySearch(searchRequest);
+                    
+                    if (results.isEmpty()) {
+                        return "";
+                    }
 
-            return results.stream()
-                    .map(Document::getText)
-                    .collect(Collectors.joining("\n\n---\n\n"));
-        } catch (Exception e) {
-            log.error("向量检索失败", e);
-            return "";
-        }
+                    return results.stream()
+                            .map(Document::getText)
+                            .collect(Collectors.joining("\n\n---\n\n"));
+                } catch (Exception e) {
+                    log.error("向量检索失败", e);
+                    return "";
+                }
+            },
+            CacheConstants.KNOWLEDGE_SEARCH_TIMEOUT,
+            CacheConstants.KNOWLEDGE_SEARCH_UNIT,
+            String.class
+        );
     }
 }
