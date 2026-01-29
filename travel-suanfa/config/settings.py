@@ -2,6 +2,7 @@
 配置文件模块
 """
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from typing import Optional, Dict, Any
 
 
@@ -16,24 +17,24 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # MySQL 数据库配置
-    MYSQL_HOST: str = "localhost"
+    MYSQL_HOST: str = "14.103.124.109"
     MYSQL_PORT: int = 3306
     MYSQL_DATABASE: str = "Travel"
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = ""
+    MYSQL_PASSWORD: str = "mysql_mPzGSm"
     
     # PostgreSQL (pgvector) 配置
-    PG_HOST: str = "localhost"
+    PG_HOST: str = "14.103.124.109"
     PG_PORT: int = 5433
-    PG_DATABASE: str = "Travel"
+    PG_DATABASE: str = "postgres"
     PG_USER: str = "admin"
-    PG_PASSWORD: str = ""
+    PG_PASSWORD: str = "yourpassword"
     
     # 向量维度配置
     VECTOR_DIMENSION: int = 1024
     
     # 外部向量化服务配置
-    EMBEDDING_SERVICE_URL: str = "http://localhost:8080/api/embeding"
+    EMBEDDING_SERVICE_URL: str = "http://14.103.124.109:8080/api/embeding"
     EMBEDDING_TIMEOUT: int = 30  # 超时时间（秒）
     
     # 推荐算法权重配置
@@ -57,9 +58,17 @@ class Settings(BaseSettings):
         "暴雨": {"outdoor_boost": -1.0, "indoor_boost": 1.0},  # 只推荐室内
     }
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # 强化学习配置
+    RL_ENABLED: bool = True  # 是否启用强化学习
+    RL_MODEL_TYPE: str = "linucb"  # 模型类型
+    RL_FEATURE_DIM: int = 50  # 状态特征维度
+    RL_CACHE_TTL_USER_STATE: int = 600  # 用户状态缓存TTL（秒）
+    RL_CACHE_TTL_MODEL_PARAMS: int = 1800  # 模型参数缓存TTL（秒）
+    
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8"
+    )
 
 
 # 全局配置实例

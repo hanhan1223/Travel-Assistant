@@ -1,8 +1,8 @@
 """
 Pydantic 模型定义
 """
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional, Any, Dict
 from datetime import datetime
 
 
@@ -91,3 +91,74 @@ class UserBehaviorLog(BaseModel):
     target_type: str
     target_id: int
     created_at: datetime
+
+
+# ==================== 强化学习相关模型 ====================
+
+class UserFeedbackRequest(BaseModel):
+    """用户反馈请求模型"""
+    sessionId: str = Field(..., description="推荐会话ID")
+    userId: int = Field(..., description="用户ID")
+    itemId: int = Field(..., description="物品ID")
+    itemType: str = Field(..., description="物品类型（project/merchant）")
+    feedbackType: str = Field(..., description="反馈类型（click/view/dismiss/favorite/share/visit/purchase）")
+    feedbackValue: Optional[float] = Field(0, description="反馈值（如浏览时长、评分等）")
+    extraData: Optional[Dict[str, Any]] = Field(None, description="额外数据")
+
+
+class UserFeedbackResponse(BaseModel):
+    """用户反馈响应模型"""
+    code: int = 200
+    message: str = "success"
+    data: Optional[Dict[str, Any]] = None
+
+
+class RLUserState(BaseModel):
+    """用户状态模型"""
+    user_id: int
+    user_features: Optional[Dict[str, Any]] = None
+    recent_context: Optional[Dict[str, Any]] = None
+    total_clicks: int = 0
+    total_views: int = 0
+    total_conversions: int = 0
+    avg_reward: float = 0.0
+    last_recommend_time: Optional[datetime] = None
+    last_update_time: Optional[datetime] = None
+
+
+class RLModelParams(BaseModel):
+    """模型参数模型"""
+    model_config = ConfigDict(protected_namespaces=())
+    
+    id: Optional[int] = None
+    model_type: str
+    model_key: str
+    params_json: Dict[str, Any]
+    feature_dim: Optional[int] = None
+    version: int = 1
+    is_active: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class RLInteractionRecord(BaseModel):
+    """推荐交互记录模型"""
+    model_config = ConfigDict(protected_namespaces=())
+    
+    id: Optional[int] = None
+    user_id: int
+    session_id: str
+    state_features: Optional[Dict[str, Any]] = None
+    state_summary: Optional[str] = None
+    action_type: str
+    action_params: Optional[Dict[str, Any]] = None
+    recommended_items: Optional[List[Dict[str, Any]]] = None
+    recommended_count: int = 0
+    immediate_reward: float = 0.0
+    delayed_reward: float = 0.0
+    total_reward: float = 0.0
+    reward_details: Optional[Dict[str, Any]] = None
+    request_context: Optional[Dict[str, Any]] = None
+    model_version: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

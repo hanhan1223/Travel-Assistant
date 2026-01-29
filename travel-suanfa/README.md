@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 非遗文化智能伴游系统 - Python 算法推荐服务
 
 基于 FastAPI 框架构建的推荐引擎，为用户提供个性化的非遗项目和商户推荐。
@@ -133,11 +132,11 @@ python_tuijian/
 
 ```python
 MYSQL_CONFIG = {
-    "host": "localhost",
+    "host": "14.103.124.109",
     "port": 3306,
     "database": "Travel",
     "user": "root",
-    "password": "your_password"
+    "password": "mysql_mPzGSm"
 }
 ```
 
@@ -150,11 +149,11 @@ MYSQL_CONFIG = {
 
 ```python
 PG_CONFIG = {
-    "host": "localhost",
+    "host": "14.103.124.109",
     "port": 5433,
-    "database": "Travel",
+    "database": "postgres",
     "user": "admin",
-    "password": "your_password"
+    "password": "yourpassword"
 }
 ```
 
@@ -176,31 +175,33 @@ pip install -r requirements.txt
 创建 `.env` 文件：
 
 ```env
-MYSQL_HOST=localhost
+MYSQL_HOST=14.103.124.109
 MYSQL_PORT=3306
 MYSQL_DATABASE=Travel
 MYSQL_USER=root
-MYSQL_PASSWORD=your_password
+MYSQL_PASSWORD=mysql_mPzGSm
 
-PG_HOST=localhost
+PG_HOST=14.103.124.109
 PG_PORT=5433
-PG_DATABASE=Travel
+PG_DATABASE=postgres
 PG_USER=admin
-PG_PASSWORD=your_password
+PG_PASSWORD=yourpassword
 ```
 
 ### 3. 启动服务
 
-**Windows:**
-
-```cmd
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Linux/Mac:**
-
 ```bash
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# 开发模式（自动重载）
+python main.py
+
+# 生产模式
+python main.py --prod
+
+# 指定端口
+python main.py --port 8080
+
+# 生产模式 + 多进程
+python main.py --prod --workers 4
 ```
 
 ### 4. 访问 API 文档
@@ -224,16 +225,6 @@ curl -X POST "http://localhost:8000/api/recommend" \
   }'
 ```
 
-### 测试向量化接口
-
-```bash
-curl -X POST "http://localhost:8000/api/embedding" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "我想体验传统刺绣文化活动"
-  }'
-```
-
 ## 技术栈
 
 - **Web 框架**: FastAPI 0.104.1
@@ -242,14 +233,14 @@ curl -X POST "http://localhost:8000/api/embedding" \
 - **向量计算**: NumPy, SciPy
 - **HTTP 客户端**: httpx
 - **ASGI 服务器**: Uvicorn
-- **向量化服务**: 后端 Spring Boot 服务提供
+- **向量化服务**: 外部接口 http://14.103.124.109:8080/api/embeding
 
 ## 向量化服务说明
 
 ### 外部服务调用
-系统通过 HTTP POST 请求调用后端向量化服务生成文本向量：
+系统通过 HTTP POST 请求调用外部向量化服务生成文本向量：
 
-**向量化接口**: `http://localhost:8080/api/embeding`
+**向量化接口**: `http://14.103.124.109:8080/api/embeding`
 
 **请求格式**:
 ```json
