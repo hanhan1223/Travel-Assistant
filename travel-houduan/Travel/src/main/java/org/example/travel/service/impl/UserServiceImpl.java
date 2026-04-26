@@ -8,6 +8,10 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
+import me.chanjar.weixin.common.bean.oauth2.WxOAuth2AccessToken;
+import me.chanjar.weixin.common.error.WxErrorException;
+import me.chanjar.weixin.mp.api.WxMpService;
 import org.apache.commons.lang3.StringUtils;
 import org.example.travel.exception.BusinessException;
 import org.example.travel.exception.ErrorCode;
@@ -19,6 +23,7 @@ import org.example.travel.model.vo.LoginUserVO;
 import org.example.travel.service.EmailService;
 import org.example.travel.service.UserService;
 import org.example.travel.mapper.UserMapper;
+import org.example.travel.utils.JwtUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -42,6 +47,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
 
     @Autowired
     private EmailService emailService;
+
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    @Autowired(required = false)
+    private WxMpService wxMpService;
 
     @Override
     public long userEmailRegister(String email, String code, String password, String checkPassword, String userName,
@@ -175,11 +186,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         }
         LoginUserVO loginUservo = new LoginUserVO();
         BeanUtil.copyProperties(user, loginUservo, CopyOptions.create().setIgnoreCase(true));
+        
+        // 生成JWT Token
+        String token = jwtUtils.generateToken(user.getId(), user.getUserrole());
+        loginUservo.setToken(token);
+        
         return loginUservo;
     }
 
     @Override
     public User getLoginUser(HttpServletRequest request) {
+        // 优先从token获取用户信息
+        String token = request.getHeader("Authorization");
+        if (token != null && token.startsWith("Bearer ")) {
+            token = token.substring(7);
+            User user = getLoginUserByToken(token);
+            if (user != null) {
+                return user;
+            }
+        }
+        
+        // 兼容原有的session方式
         Object loginState = request.getSession().getAttribute("user_login_state");
         User currentUser = (User) loginState;
         if (loginState == null || currentUser.getId() == null) {
@@ -296,5 +323,94 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         String countStr = (String) redisTemplate.opsForValue().get(key);
         int count = countStr == null ? 0 : Integer.parseInt(countStr);
         redisTemplate.opsForValue().set(key, String.valueOf(count + 1), 30, TimeUnit.MINUTES);
+    }
+
+    @Override
+    public LoginUserVO weChatLogin(String code, HttpServletRequest request) {
+        if (wxMpService == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "微信登录功能未配置");
+        }
+        
+        try {
+            // 通过code获取access_token
+            WxOAuth2AccessToken accessToken = wxMpService.getOAuth2Service().getAccessToken(code);
+            String openId = accessToken.getOpenId();
+            String unionId = accessToken.getUnionId();
+            
+            // 获取微信用户信息
+            WxOAuth2UserInfo userInfo = wxMpService.getOAuth2Service().getUserInfo(accessToken, "zh_CN");
+            
+            // 查询用户是否已存在
+            QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+            if (StringUtils.isNotBlank(unionId)) {
+                queryWrapper.eq("unionId", unionId);
+            } else {
+                queryWrapper.eq("mpOpenId", openId);
+            }
+            
+            User user = this.getOne(queryWrapper);
+            
+            // 如果用户不存在，创建新用户
+            if (user == null) {
+                user = new User();
+                user.setUnionid(unionId);
+                user.setMpopenid(openId);
+                user.setUsername(userInfo.getNickname());
+                user.setUseravatar(userInfo.getHeadImgUrl());
+                user.setUseraccount("wx_" + System.currentTimeMillis());
+                user.setUserrole("user");
+                
+                Date now = new Date();
+                user.setCreatetime(now);
+                user.setUpdatetime(now);
+                user.setEdittime(now);
+                user.setIsdelete(0);
+                
+                boolean saveResult = this.save(user);
+                if (!saveResult) {
+                    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "微信登录失败");
+                }
+            } else {
+                // 更新用户信息
+                user.setUsername(userInfo.getNickname());
+                user.setUseravatar(userInfo.getHeadImgUrl());
+                this.updateById(user);
+            }
+            
+            // 设置登录状态（兼容session）
+            request.getSession().setAttribute("user_login_state", user);
+            
+            return this.getLoginUserVO(user);
+            
+        } catch (WxErrorException e) {
+            log.error("微信登录失败: {}", e.getMessage());
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "微信登录失败: " + e.getError().getErrorMsg());
+        }
+    }
+
+    @Override
+    public User getLoginUserByToken(String token) {
+        if (StringUtils.isBlank(token)) {
+            return null;
+        }
+        
+        // 验证token
+        if (!jwtUtils.validateToken(token)) {
+            return null;
+        }
+        
+        // 从token中获取用户ID
+        Long userId = jwtUtils.getUserIdFromToken(token);
+        if (userId == null) {
+            return null;
+        }
+        
+        // 查询用户
+        User user = this.getById(userId);
+        if (user == null) {
+            return null;
+        }
+        
+        return user;
     }
 }

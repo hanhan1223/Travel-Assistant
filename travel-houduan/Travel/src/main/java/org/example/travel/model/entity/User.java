@@ -79,5 +79,16 @@ public class User implements Serializable {
     @TableField("email")
     private String email;
 
+    /**
+     * 微信开放平台id
+     */
+    @TableField("unionId")
+    private String unionid;
+
+    /**
+     * 微信公众号openId
+     */
+    @TableField("mpOpenId")
+    private String mpopenid;
 
 }

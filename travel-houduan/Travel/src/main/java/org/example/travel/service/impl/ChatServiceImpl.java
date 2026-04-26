@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -772,8 +773,8 @@ public class ChatServiceImpl implements ChatService {
                     emitter.send(JSONUtil.toJsonStr(StreamChunk.done(finalConversationId)));
                     
                     // 保存助手回复
-                    String toolCallJson = extractedLocations.isEmpty() ? null : JSONUtil.toJsonStr(extractedLocations);
-                    saveMessage(finalConversationId, "assistant", finalAnswer, toolCallJson);
+                    String assistantToolCallJson = extractedLocations.isEmpty() ? null : JSONUtil.toJsonStr(extractedLocations);
+                    saveMessage(finalConversationId, "assistant", finalAnswer, assistantToolCallJson);
                     
                     // 更新会话标题
                     updateConversationTitleIfNeeded(finalConversationId, userMessage);

@@ -11,7 +11,10 @@ import org.example.travel.model.dto.user.*;
 import org.example.travel.model.entity.User;
 import org.example.travel.model.vo.LoginUserVO;
 import org.example.travel.service.UserService;
+import org.example.travel.utils.JwtUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+import cn.hutool.core.util.StrUtil;
 
 
 /**
@@ -23,6 +26,9 @@ public class UserController {
 
     @Resource
     UserService userService;
+
+    @Autowired
+    private JwtUtils jwtUtils;
 
     /**
      * 用户通过邮箱注册
@@ -116,6 +122,43 @@ public class UserController {
     public BaseResponse<Boolean> sendRegisterCode(@RequestBody SendCodeRequest request) {
         userService.sendEmailRegisterCode(request.getEmail());
         return Result.success(true);
+    }
+
+    /**
+     * 微信登录
+     *
+     * @param weChatLoginRequest 微信登录请求
+     * @param request HTTP请求对象
+     * @return 登录用户信息
+     */
+    @PostMapping("/wechat/login")
+    public BaseResponse<LoginUserVO> weChatLogin(@RequestBody WeChatLoginRequest weChatLoginRequest,
+                                                 HttpServletRequest request) {
+        ThrowUtils.throwIf(weChatLoginRequest == null, ErrorCode.PARAMS_ERROR);
+        String code = weChatLoginRequest.getCode();
+        ThrowUtils.throwIf(StrUtil.isBlank(code), ErrorCode.PARAMS_ERROR, "授权码不能为空");
+        
+        LoginUserVO loginUserVO = userService.weChatLogin(code, request);
+        return Result.success(loginUserVO);
+    }
+
+    /**
+     * 刷新Token
+     *
+     * @param request HTTP请求对象
+     * @return 新的token
+     */
+    @PostMapping("/refresh-token")
+    public BaseResponse<String> refreshToken(HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        String token = request.getHeader("Authorization");
+        if (token != null && token.startsWith("Bearer ")) {
+            token = token.substring(7);
+        }
+        
+        // 生成新token
+        String newToken = jwtUtils.generateToken(loginUser.getId(), loginUser.getUserrole());
+        return Result.success(newToken);
     }
 
     

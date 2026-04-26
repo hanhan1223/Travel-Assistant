@@ -85,5 +85,22 @@ public interface UserService extends IService<User> {
      */
 
     void sendEmailRegisterCode(String email);
+
+    /**
+     * 微信登录
+     *
+     * @param code 微信授权码
+     * @param request HTTP请求对象
+     * @return 登录用户信息
+     */
+    LoginUserVO weChatLogin(String code, HttpServletRequest request);
+
+    /**
+     * 通过Token获取登录用户
+     *
+     * @param token JWT token
+     * @return 用户信息
+     */
+    User getLoginUserByToken(String token);
 }
 

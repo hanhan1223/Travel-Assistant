@@ -52,6 +52,11 @@ public class LoginUserVO implements Serializable {
      */
     private String email;
 
+    /**
+     * JWT Token
+     */
+    private String token;
+
     private static final long serialVersionUID = 1L;
 
 }
